@@ -1,0 +1,58 @@
+// Copyright (c) 2015-2016, tandasat. All rights reserved.
+// Use of this source code is governed by a MIT-style license that can be
+// found in the LICENSE file.
+
+//
+// This module declares extended code as MemoryMon.
+//
+
+#ifndef MEMORYMON_MEMORYMON_H_
+#define MEMORYMON_MEMORYMON_H_
+
+#include <fltKernel.h>
+
+extern "C" {
+////////////////////////////////////////////////////////////////////////////////
+//
+// macro utilities
+//
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// constants and macros
+//
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// types
+//
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// prototypes
+//
+
+_IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS
+    MmonInitialization(_In_ PDRIVER_OBJECT driver_object);
+
+_IRQL_requires_max_(PASSIVE_LEVEL) void MmonTermination();
+
+_IRQL_requires_max_(PASSIVE_LEVEL) void MmonExecuteDoggyRegion();
+
+PVOID MmonPcToFileHeader(_In_ PVOID pc_value);
+
+void *MmonGetPfnDatabase();
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// variables
+//
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// implementations
+//
+
+} // extern "C"
+
+#endif // MEMORYMON_MEMORYMON_H_
