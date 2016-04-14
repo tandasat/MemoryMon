@@ -1,0 +1,3 @@
+[submodule "HyperPlatform"]
+	path = HyperPlatform
+	url = https://github.com/tandasat/HyperPlatform.git
