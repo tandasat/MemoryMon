@@ -36,7 +36,7 @@ union EptCommonEntry;
 //
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-    MmonEptData *MmoneptInitialization(_In_ EptCommonEntry *ept_pml4);
+    MmonEptData *MmoneptInitialization(_In_ EptData *ept_data);
 
 void MmoneptTermination(_In_ MmonEptData *hs_ept_data);
 
@@ -57,6 +57,6 @@ void MmoneptHandleDodgyRegionExecution(_In_ MmonEptData *ept_data,
 // implementations
 //
 
-} // extern "C"
+}  // extern "C"
 
-#endif // MEMORYMON_MEMORYMON_EPT_H_
+#endif  // MEMORYMON_MEMORYMON_EPT_H_

@@ -13,7 +13,7 @@
 #include "memorymon_ept.h"
 #ifndef HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
 #define HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER 1
-#endif // HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
+#endif  // HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
 #include "../HyperPlatform/HyperPlatform/performance.h"
 
 extern "C" {
@@ -71,8 +71,7 @@ _IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpResetDisabledEntriesUnsa
 //
 
 // Initializes EPT related parts of MemoryMon
-_Use_decl_annotations_ MmonEptData *
-MmoneptInitialization(EptCommonEntry *ept_pml4) {
+_Use_decl_annotations_ MmonEptData *MmoneptInitialization(EptData *ept_data) {
   RTL_OSVERSIONINFOW os_version = {};
   auto status = RtlGetVersion(&os_version);
   if (!NT_SUCCESS(status)) {
@@ -89,7 +88,7 @@ MmoneptInitialization(EptCommonEntry *ept_pml4) {
     const auto base_addr = run->base_page * PAGE_SIZE;
     for (auto page_index = 0ull; page_index < run->page_count; ++page_index) {
       const auto indexed_addr = base_addr + page_index * PAGE_SIZE;
-      const auto ept_pt_entry = EptGetEptPtEntry(ept_pml4, 4, indexed_addr);
+      const auto ept_pt_entry = EptGetEptPtEntry(ept_data, indexed_addr);
 
       // Mark the page as non-executable if it is not a non-pagable section of
       // a system module.
@@ -140,10 +139,9 @@ _Use_decl_annotations_ void MmoneptTermination(MmonEptData *hs_ept_data) {
 }
 
 // Handles an occurence of execution of a doggy region
-_Use_decl_annotations_ void
-MmoneptHandleDodgyRegionExecution(MmonEptData *ept_data,
-                                  EptCommonEntry *ept_pt_entry,
-                                  ULONG64 fault_pa, void *fault_va) {
+_Use_decl_annotations_ void MmoneptHandleDodgyRegionExecution(
+    MmonEptData *ept_data, EptCommonEntry *ept_pt_entry, ULONG64 fault_pa,
+    void *fault_va) {
   // Protection violation. Examine the fault physical address and handle it
   // accordingly.
   HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
@@ -183,8 +181,8 @@ MmoneptHandleDodgyRegionExecution(MmonEptData *ept_data,
 }
 
 // Check if the address is a copy of KiInterruptTemplate
-_Use_decl_annotations_ static bool
-MmoneptpIsCopiedKiInterruptTemplate(void *virtual_address) {
+_Use_decl_annotations_ static bool MmoneptpIsCopiedKiInterruptTemplate(
+    void *virtual_address) {
   if (IsX64()) {
     // nt!KiInterruptTemplate:
     // 50              push    rax
@@ -227,8 +225,8 @@ MmoneptpIsCopiedKiInterruptTemplate(void *virtual_address) {
 }
 
 // Add the EPT entry to the disabled entries array
-_Use_decl_annotations_ static void
-MmoneptpAddDisabledEntry(MmonEptData *ept_data, EptCommonEntry *ept_entry) {
+_Use_decl_annotations_ static void MmoneptpAddDisabledEntry(
+    MmonEptData *ept_data, EptCommonEntry *ept_entry) {
   HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   KLOCK_QUEUE_HANDLE lock_handle = {};
   KeAcquireInStackQueuedSpinLockAtDpcLevel(&ept_data->disabled_entries_lock,
@@ -255,8 +253,8 @@ _Use_decl_annotations_ void MmoneptResetDisabledEntries(MmonEptData *ept_data) {
 }
 
 // Clear all disabled EPT entries without spin lock
-_Use_decl_annotations_ static void
-MmoneptpResetDisabledEntriesUnsafe(MmonEptData *ept_data) {
+_Use_decl_annotations_ static void MmoneptpResetDisabledEntriesUnsafe(
+    MmonEptData *ept_data) {
   HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   const auto count = ept_data->disabled_entries_count;
   for (auto i = 0l; i < count; ++i) {
@@ -272,4 +270,4 @@ MmoneptpResetDisabledEntriesUnsafe(MmonEptData *ept_data) {
   }
 }
 
-} // extern "C"
+}  // extern "C"
