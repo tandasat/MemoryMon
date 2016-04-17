@@ -101,13 +101,13 @@ _Use_decl_annotations_ MmonEptData *MmoneptInitialization(EptData *ept_data) {
   }
 
   // Allocate ept_data
-  const auto hs_ept_data =
+  const auto mm_ept_data =
       reinterpret_cast<MmonEptData *>(ExAllocatePoolWithTag(
           NonPagedPoolNx, sizeof(MmonEptData), kHyperPlatformCommonPoolTag));
-  if (!hs_ept_data) {
+  if (!mm_ept_data) {
     return nullptr;
   }
-  RtlZeroMemory(hs_ept_data, sizeof(MmonEptData));
+  RtlZeroMemory(mm_ept_data, sizeof(MmonEptData));
 
   // Allocate disabled_entries
   const auto disabled_entries_size =
@@ -116,26 +116,26 @@ _Use_decl_annotations_ MmonEptData *MmoneptInitialization(EptData *ept_data) {
       reinterpret_cast<EptCommonEntry **>(ExAllocatePoolWithTag(
           NonPagedPoolNx, disabled_entries_size, kHyperPlatformCommonPoolTag));
   if (!disabled_entries) {
-    ExFreePoolWithTag(hs_ept_data, kHyperPlatformCommonPoolTag);
+    ExFreePoolWithTag(mm_ept_data, kHyperPlatformCommonPoolTag);
     return nullptr;
   }
   RtlZeroMemory(disabled_entries, disabled_entries_size);
 
-  hs_ept_data->disabled_entries = disabled_entries;
-  hs_ept_data->disabled_entries_count = 0;
-  hs_ept_data->disabled_entries_max_usage = 0;
-  KeInitializeSpinLock(&hs_ept_data->disabled_entries_lock);
-  return hs_ept_data;
+  mm_ept_data->disabled_entries = disabled_entries;
+  mm_ept_data->disabled_entries_count = 0;
+  mm_ept_data->disabled_entries_max_usage = 0;
+  KeInitializeSpinLock(&mm_ept_data->disabled_entries_lock);
+  return mm_ept_data;
 }
 
 // Terminates EPT related parts of MemoryMon
-_Use_decl_annotations_ void MmoneptTermination(MmonEptData *hs_ept_data) {
+_Use_decl_annotations_ void MmoneptTermination(MmonEptData *mm_ept_data) {
   HYPERPLATFORM_LOG_DEBUG("Used disabled entries (Max) = %5d / %5d",
-                          hs_ept_data->disabled_entries_max_usage,
+                          mm_ept_data->disabled_entries_max_usage,
                           kMmoneptpMaxNumberOfDisabledEntries);
 
-  ExFreePoolWithTag(hs_ept_data->disabled_entries, kHyperPlatformCommonPoolTag);
-  ExFreePoolWithTag(hs_ept_data, kHyperPlatformCommonPoolTag);
+  ExFreePoolWithTag(mm_ept_data->disabled_entries, kHyperPlatformCommonPoolTag);
+  ExFreePoolWithTag(mm_ept_data, kHyperPlatformCommonPoolTag);
 }
 
 // Handles an occurence of execution of a doggy region

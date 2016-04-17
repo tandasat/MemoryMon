@@ -38,9 +38,9 @@ union EptCommonEntry;
 _IRQL_requires_max_(PASSIVE_LEVEL)
     MmonEptData *MmoneptInitialization(_In_ EptData *ept_data);
 
-void MmoneptTermination(_In_ MmonEptData *hs_ept_data);
+void MmoneptTermination(_In_ MmonEptData *mm_ept_data);
 
-void MmoneptResetDisabledEntries(_In_ MmonEptData *hs_ept_data);
+void MmoneptResetDisabledEntries(_In_ MmonEptData *mm_ept_data);
 
 void MmoneptHandleDodgyRegionExecution(_In_ MmonEptData *ept_data,
                                        _In_ EptCommonEntry *ept_pt_entry,
