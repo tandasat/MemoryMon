@@ -2,9 +2,8 @@
 // Use of this source code is governed by a MIT-style license that can be
 // found in the LICENSE file.
 
-//
-// This module implements EPT related parts of MemoryMon.
-//
+// Implements EPT related parts of MemoryMon
+
 #include "../HyperPlatform/HyperPlatform/common.h"
 #include "../HyperPlatform/HyperPlatform/ept.h"
 #include "../HyperPlatform/HyperPlatform/log.h"
@@ -51,10 +50,10 @@ struct MmonEptData {
 static bool MmoneptpIsCopiedKiInterruptTemplate(_In_ void *virtual_address);
 
 _IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpAddDisabledEntry(
-    _In_ MmonEptData *ept_data, _In_ EptCommonEntry *ept_entry);
+    _In_ MmonEptData *mmon_ept_data, _In_ EptCommonEntry *ept_entry);
 
 _IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpResetDisabledEntriesUnsafe(
-    _In_ MmonEptData *ept_data);
+    _In_ MmonEptData *mmon_ept_data);
 
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, MmoneptInitialization)
@@ -93,21 +92,21 @@ _Use_decl_annotations_ MmonEptData *MmoneptInitialization(EptData *ept_data) {
       // Mark the page as non-executable if it is not a non-pagable section of
       // a system module.
       const auto va = UtilVaFromPa(indexed_addr);
-      if (!MmonPcToFileHeader(va) ||
+      if (!UtilPcToFileHeader(va) ||
           !UtilIsNonPageableAddress(va, pfn_database, is_v6_kernel)) {
         ept_pt_entry->fields.execute_access = false;
       }
     }
   }
 
-  // Allocate ept_data
-  const auto mm_ept_data =
+  // Allocate mmon_ept_data
+  const auto mmon_ept_data =
       reinterpret_cast<MmonEptData *>(ExAllocatePoolWithTag(
           NonPagedPoolNx, sizeof(MmonEptData), kHyperPlatformCommonPoolTag));
-  if (!mm_ept_data) {
+  if (!mmon_ept_data) {
     return nullptr;
   }
-  RtlZeroMemory(mm_ept_data, sizeof(MmonEptData));
+  RtlZeroMemory(mmon_ept_data, sizeof(MmonEptData));
 
   // Allocate disabled_entries
   const auto disabled_entries_size =
@@ -116,31 +115,32 @@ _Use_decl_annotations_ MmonEptData *MmoneptInitialization(EptData *ept_data) {
       reinterpret_cast<EptCommonEntry **>(ExAllocatePoolWithTag(
           NonPagedPoolNx, disabled_entries_size, kHyperPlatformCommonPoolTag));
   if (!disabled_entries) {
-    ExFreePoolWithTag(mm_ept_data, kHyperPlatformCommonPoolTag);
+    ExFreePoolWithTag(mmon_ept_data, kHyperPlatformCommonPoolTag);
     return nullptr;
   }
   RtlZeroMemory(disabled_entries, disabled_entries_size);
 
-  mm_ept_data->disabled_entries = disabled_entries;
-  mm_ept_data->disabled_entries_count = 0;
-  mm_ept_data->disabled_entries_max_usage = 0;
-  KeInitializeSpinLock(&mm_ept_data->disabled_entries_lock);
-  return mm_ept_data;
+  mmon_ept_data->disabled_entries = disabled_entries;
+  mmon_ept_data->disabled_entries_count = 0;
+  mmon_ept_data->disabled_entries_max_usage = 0;
+  KeInitializeSpinLock(&mmon_ept_data->disabled_entries_lock);
+  return mmon_ept_data;
 }
 
 // Terminates EPT related parts of MemoryMon
-_Use_decl_annotations_ void MmoneptTermination(MmonEptData *mm_ept_data) {
+_Use_decl_annotations_ void MmoneptTermination(MmonEptData *mmon_ept_data) {
   HYPERPLATFORM_LOG_DEBUG("Used disabled entries (Max) = %5d / %5d",
-                          mm_ept_data->disabled_entries_max_usage,
+                          mmon_ept_data->disabled_entries_max_usage,
                           kMmoneptpMaxNumberOfDisabledEntries);
 
-  ExFreePoolWithTag(mm_ept_data->disabled_entries, kHyperPlatformCommonPoolTag);
-  ExFreePoolWithTag(mm_ept_data, kHyperPlatformCommonPoolTag);
+  ExFreePoolWithTag(mmon_ept_data->disabled_entries,
+                    kHyperPlatformCommonPoolTag);
+  ExFreePoolWithTag(mmon_ept_data, kHyperPlatformCommonPoolTag);
 }
 
 // Handles an occurence of execution of a doggy region
 _Use_decl_annotations_ void MmoneptHandleDodgyRegionExecution(
-    MmonEptData *ept_data, EptCommonEntry *ept_pt_entry, ULONG64 fault_pa,
+    MmonEptData *mmon_ept_data, EptCommonEntry *ept_pt_entry, ULONG64 fault_pa,
     void *fault_va) {
   // Protection violation. Examine the fault physical address and handle it
   // accordingly.
@@ -152,12 +152,12 @@ _Use_decl_annotations_ void MmoneptHandleDodgyRegionExecution(
     // HYPER_PLATFORM_LOG_DEBUG_SAFE("[EXEC] Usr VA = %p, PA = %016llx",
     // fault_va, fault_pa);
     ept_pt_entry->fields.execute_access = true;
-    MmoneptpAddDisabledEntry(ept_data, ept_pt_entry);
-  } else if ((image_base_va = MmonPcToFileHeader(fault_va)) != nullptr) {
+    MmoneptpAddDisabledEntry(mmon_ept_data, ept_pt_entry);
+  } else if ((image_base_va = UtilPcToFileHeader(fault_va)) != nullptr) {
     // HYPER_PLATFORM_LOG_DEBUG_SAFE("[EXEC] Img VA = %p, PA = %016llx, Base =
     // %p", fault_va, fault_pa, image_base_va);
     ept_pt_entry->fields.execute_access = true;
-    MmoneptpAddDisabledEntry(ept_data, ept_pt_entry);
+    MmoneptpAddDisabledEntry(mmon_ept_data, ept_pt_entry);
   } else if (MmoneptpIsCopiedKiInterruptTemplate(fault_va)) {
     // HYPER_PLATFORM_LOG_DEBUG_SAFE("[EXEC] Int VA = %p, PA = %016llx",
     // fault_va, fault_pa);
@@ -168,13 +168,13 @@ _Use_decl_annotations_ void MmoneptHandleDodgyRegionExecution(
   } else {
     const auto guest_sp =
         reinterpret_cast<void **>(UtilVmRead(VmcsField::kGuestRsp));
-    const auto return_base_va = MmonPcToFileHeader(*guest_sp);
+    const auto return_base_va = UtilPcToFileHeader(*guest_sp);
     HYPERPLATFORM_LOG_INFO_SAFE(
         "[EXEC] *** VA = %p, PA = %016llx, Return = %p, ReturnBase = %p",
         fault_va, fault_pa, *guest_sp, return_base_va);
 
     ept_pt_entry->fields.execute_access = true;
-    MmoneptpAddDisabledEntry(ept_data, ept_pt_entry);
+    MmoneptpAddDisabledEntry(mmon_ept_data, ept_pt_entry);
   }
 
   UtilInveptAll();
@@ -226,44 +226,45 @@ _Use_decl_annotations_ static bool MmoneptpIsCopiedKiInterruptTemplate(
 
 // Add the EPT entry to the disabled entries array
 _Use_decl_annotations_ static void MmoneptpAddDisabledEntry(
-    MmonEptData *ept_data, EptCommonEntry *ept_entry) {
+    MmonEptData *mmon_ept_data, EptCommonEntry *ept_entry) {
   HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   KLOCK_QUEUE_HANDLE lock_handle = {};
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(&ept_data->disabled_entries_lock,
-                                           &lock_handle);
-  auto count = ept_data->disabled_entries_count;
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(
+      &mmon_ept_data->disabled_entries_lock, &lock_handle);
+  auto count = mmon_ept_data->disabled_entries_count;
   if (count >= kMmoneptpMaxNumberOfDisabledEntries) {
-    MmoneptpResetDisabledEntriesUnsafe(ept_data);
+    MmoneptpResetDisabledEntriesUnsafe(mmon_ept_data);
     count = 0;
   }
-  ept_data->disabled_entries[count] = ept_entry;
-  ept_data->disabled_entries_count++;
+  mmon_ept_data->disabled_entries[count] = ept_entry;
+  mmon_ept_data->disabled_entries_count++;
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
 }
 
 // Clear all disabled EPT entries (ie, reset all EPT entries that were marked
 // as executable to non-executable again)
-_Use_decl_annotations_ void MmoneptResetDisabledEntries(MmonEptData *ept_data) {
+_Use_decl_annotations_ void MmoneptResetDisabledEntries(
+    MmonEptData *mmon_ept_data) {
   HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   KLOCK_QUEUE_HANDLE lock_handle = {};
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(&ept_data->disabled_entries_lock,
-                                           &lock_handle);
-  MmoneptpResetDisabledEntriesUnsafe(ept_data);
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(
+      &mmon_ept_data->disabled_entries_lock, &lock_handle);
+  MmoneptpResetDisabledEntriesUnsafe(mmon_ept_data);
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
 }
 
 // Clear all disabled EPT entries without spin lock
 _Use_decl_annotations_ static void MmoneptpResetDisabledEntriesUnsafe(
-    MmonEptData *ept_data) {
+    MmonEptData *mmon_ept_data) {
   HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
-  const auto count = ept_data->disabled_entries_count;
+  const auto count = mmon_ept_data->disabled_entries_count;
   for (auto i = 0l; i < count; ++i) {
-    auto disabledEntry = ept_data->disabled_entries[i];
+    auto disabledEntry = mmon_ept_data->disabled_entries[i];
     disabledEntry->fields.execute_access = false;
   }
-  ept_data->disabled_entries_count = 0;
-  if (count > ept_data->disabled_entries_max_usage) {
-    ept_data->disabled_entries_max_usage = count;
+  mmon_ept_data->disabled_entries_count = 0;
+  if (count > mmon_ept_data->disabled_entries_max_usage) {
+    mmon_ept_data->disabled_entries_max_usage = count;
   }
   if (count) {
     UtilInveptAll();

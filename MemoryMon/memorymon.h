@@ -2,9 +2,7 @@
 // Use of this source code is governed by a MIT-style license that can be
 // found in the LICENSE file.
 
-//
-// This module declares extended code as MemoryMon.
-//
+// Declares extended code as MemoryMon
 
 #ifndef MEMORYMON_MEMORYMON_H_
 #define MEMORYMON_MEMORYMON_H_
@@ -32,14 +30,11 @@ extern "C" {
 // prototypes
 //
 
-_IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS
-    MmonInitialization(_In_ PDRIVER_OBJECT driver_object);
+_IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS MmonInitialization();
 
 _IRQL_requires_max_(PASSIVE_LEVEL) void MmonTermination();
 
 _IRQL_requires_max_(PASSIVE_LEVEL) void MmonExecuteDoggyRegion();
-
-PVOID MmonPcToFileHeader(_In_ PVOID pc_value);
 
 void *MmonGetPfnDatabase();
 
@@ -53,6 +48,6 @@ void *MmonGetPfnDatabase();
 // implementations
 //
 
-} // extern "C"
+}  // extern "C"
 
-#endif // MEMORYMON_MEMORYMON_H_
+#endif  // MEMORYMON_MEMORYMON_H_
