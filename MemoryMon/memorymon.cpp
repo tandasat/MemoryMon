@@ -163,11 +163,18 @@ _Use_decl_annotations_ void MmonExecuteDoggyRegion() {
                           UtilPaFromVa(code));
   code[0] = 0x90;  // nop
   code[1] = 0x90;  // nop
-  code[2] = 0xc3;  // ret
+  if (IsX64()) {
+    code[2] = 0xc3;  // ret
+  } else {
+    code[2] = 0xc2;
+    code[3] = 0x04;  // retn 4
+  }
   KeInvalidateAllCaches();
 
-  auto function = reinterpret_cast<void (*)(void)>(code);
-  function();
+  // Runs code on all processors at once
+  auto function = reinterpret_cast<PKIPI_BROADCAST_WORKER>(code);
+  KeIpiGenericCall(function, 0);
+
   ExFreePoolWithTag(code, kHyperPlatformCommonPoolTag);
 }
 

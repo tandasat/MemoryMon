@@ -30,6 +30,10 @@ extern "C" {
 // exceeds it, hypervisor reset all entries.
 static const auto kMmoneptpMaxNumberOfDisabledEntries = 4096 * 5;
 
+// How many pages can be saved as ones already logged and should not be printed
+// out again.
+static const auto kMmoneptpMaxNumberOfLoggedEntries = 1024;
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // types
@@ -55,6 +59,11 @@ _IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpAddDisabledEntry(
 _IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpResetDisabledEntriesUnsafe(
     _In_ MmonEptData *mmon_ept_data);
 
+_IRQL_requires_min_(DISPATCH_LEVEL) static bool MmoneptpAddToLoggedPages(
+    _In_ ULONG64 fault_pa);
+
+_IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpClearLoggedPages();
+
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, MmoneptInitialization)
 #endif
@@ -64,6 +73,19 @@ _IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpResetDisabledEntriesUnsa
 // variables
 //
 
+// An array of PNFs already logged as an executed dodgy page. It is used to
+// avoid logging the same page twice for different processors by sharing
+// executed dodgy memory pages across processors.
+static PFN_NUMBER g_mmoneptp_logged_pages[kMmoneptpMaxNumberOfLoggedEntries];
+static KSPIN_LOCK g_mmoneptp_logged_pages_skinlock;
+
+// Indicates how many entries are being used. MAXLONG indicates that related
+// data structures are uninitialized.
+static volatile long g_mmoneptp_logged_pages_index = MAXLONG;
+
+// Indicates how many entries are used as most.
+static long g_mmoneptp_logged_pages_max_usage = 0;
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // implementations
@@ -71,6 +93,11 @@ _IRQL_requires_min_(DISPATCH_LEVEL) static void MmoneptpResetDisabledEntriesUnsa
 
 // Initializes EPT related parts of MemoryMon
 _Use_decl_annotations_ MmonEptData *MmoneptInitialization(EptData *ept_data) {
+  if (g_mmoneptp_logged_pages_index == MAXLONG) {
+    g_mmoneptp_logged_pages_index = 0;
+    KeInitializeSpinLock(&g_mmoneptp_logged_pages_skinlock);
+  }
+
   RTL_OSVERSIONINFOW os_version = {};
   auto status = RtlGetVersion(&os_version);
   if (!NT_SUCCESS(status)) {
@@ -129,6 +156,15 @@ _Use_decl_annotations_ MmonEptData *MmoneptInitialization(EptData *ept_data) {
 
 // Terminates EPT related parts of MemoryMon
 _Use_decl_annotations_ void MmoneptTermination(MmonEptData *mmon_ept_data) {
+  // Prints out only once
+  if (g_mmoneptp_logged_pages_max_usage != MAXLONG) {
+    HYPERPLATFORM_LOG_DEBUG("Used logged entries (Max) = %5d / %5d",
+                            g_mmoneptp_logged_pages_max_usage,
+                            kMmoneptpMaxNumberOfLoggedEntries);
+    // Mark as already-printed
+    g_mmoneptp_logged_pages_max_usage = MAXLONG;
+  }
+
   HYPERPLATFORM_LOG_DEBUG("Used disabled entries (Max) = %5d / %5d",
                           mmon_ept_data->disabled_entries_max_usage,
                           kMmoneptpMaxNumberOfDisabledEntries);
@@ -166,15 +202,18 @@ _Use_decl_annotations_ void MmoneptHandleDodgyRegionExecution(
     // violation for this address. Since it is an interruption handler, it
     // has to be on non-paged pool and unlikely to be unmapped and reused.
   } else {
-    const auto guest_sp =
-        reinterpret_cast<void **>(UtilVmRead(VmcsField::kGuestRsp));
-    const auto return_base_va = UtilPcToFileHeader(*guest_sp);
-    HYPERPLATFORM_LOG_INFO_SAFE(
-        "[EXEC] *** VA = %p, PA = %016llx, Return = %p, ReturnBase = %p",
-        fault_va, fault_pa, *guest_sp, return_base_va);
-
     ept_pt_entry->fields.execute_access = true;
     MmoneptpAddDisabledEntry(mmon_ept_data, ept_pt_entry);
+
+    // Add the page to the logged pages and log it when it is not already logged
+    if (!MmoneptpAddToLoggedPages(fault_pa)) {
+      const auto guest_sp =
+          reinterpret_cast<void **>(UtilVmRead(VmcsField::kGuestRsp));
+      const auto return_base_va = UtilPcToFileHeader(*guest_sp);
+      HYPERPLATFORM_LOG_INFO_SAFE(
+          "[EXEC] *** VA = %p, PA = %016llx, Return = %p, ReturnBase = %p",
+          fault_va, fault_pa, *guest_sp, return_base_va);
+    }
   }
 
   UtilInveptAll();
@@ -269,6 +308,60 @@ _Use_decl_annotations_ static void MmoneptpResetDisabledEntriesUnsafe(
   if (count) {
     UtilInveptAll();
   }
+  MmoneptpClearLoggedPages();
+}
+
+// Returns if \a fault_pa is in the logged pages and adds \a fault_pa to the
+// logged pages if not added yet.
+_Use_decl_annotations_ static bool MmoneptpAddToLoggedPages(ULONG64 fault_pa) {
+  const auto fault_pfn = UtilPfnFromPa(fault_pa);
+  bool already_logged = false;
+
+  KLOCK_QUEUE_HANDLE lock_handle = {};
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_mmoneptp_logged_pages_skinlock,
+                                           &lock_handle);
+
+  // Check if the pfn is already logged
+  for (auto i = 0l; i < g_mmoneptp_logged_pages_index; ++i) {
+    const auto logged_pfn = g_mmoneptp_logged_pages[i];
+    if (logged_pfn == fault_pfn) {
+      already_logged = true;
+      HYPERPLATFORM_LOG_DEBUG_SAFE("Execution on %p was filtered.", fault_pa);
+      break;
+    }
+  }
+
+  // If not, add it when possible
+  if (!already_logged) {
+    if (g_mmoneptp_logged_pages_index == kMmoneptpMaxNumberOfLoggedEntries) {
+      HYPERPLATFORM_LOG_WARN_SAFE(
+          "Logged entry is full. Any new dodgy execution will no longer be "
+          "filtered.");
+    } else {
+      // There is room to add this pfn. Add it.
+      g_mmoneptp_logged_pages[g_mmoneptp_logged_pages_index] = fault_pfn;
+      g_mmoneptp_logged_pages_index++;
+      // Updated max usage if needed
+      if (g_mmoneptp_logged_pages_index > g_mmoneptp_logged_pages_max_usage) {
+        g_mmoneptp_logged_pages_max_usage = g_mmoneptp_logged_pages_index;
+      }
+    }
+  }
+
+  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
+  return already_logged;
+}
+
+// Empties the logged pages
+_Use_decl_annotations_ static void MmoneptpClearLoggedPages() {
+  KLOCK_QUEUE_HANDLE lock_handle = {};
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_mmoneptp_logged_pages_skinlock,
+                                           &lock_handle);
+  const auto size =
+      g_mmoneptp_logged_pages_index * sizeof(g_mmoneptp_logged_pages[0]);
+  RtlFillMemory(g_mmoneptp_logged_pages, size, 0);
+  g_mmoneptp_logged_pages_index = 0;
+  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
 }
 
 }  // extern "C"
