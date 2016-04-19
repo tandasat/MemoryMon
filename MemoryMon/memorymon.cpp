@@ -149,11 +149,9 @@ _Use_decl_annotations_ static NTSTATUS MmonpInitializeMmPfnDatabase() {
 _Use_decl_annotations_ void MmonExecuteDoggyRegion() {
   PAGED_CODE();
 
-#pragma warning(push)
-#pragma warning(disable : 30030)
+#pragma prefast(suppress : 30030, "Allocating executable POOL_TYPE memory")
   auto code = reinterpret_cast<UCHAR *>(ExAllocatePoolWithTag(
       NonPagedPoolExecute, PAGE_SIZE, kHyperPlatformCommonPoolTag));
-#pragma warning(pop)
 
   if (!code) {
     return;
