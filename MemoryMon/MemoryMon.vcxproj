@@ -137,6 +137,7 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\performance.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\perf_counter.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\util.h" />
+    <ClInclude Include="..\HyperPlatform\HyperPlatform\util_page_constants.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vm.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vmm.h" />
     <ClInclude Include="memorymon.h" />

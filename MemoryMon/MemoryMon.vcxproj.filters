@@ -98,6 +98,9 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vmm.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\HyperPlatform\HyperPlatform\util_page_constants.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <MASM Include="..\HyperPlatform\HyperPlatform\Arch\x64\x64.asm">
