@@ -1,5 +1,5 @@
-MemoryMon
-==========
+MemoryMonRWE
+=============
 
 Introduction
 -------------
