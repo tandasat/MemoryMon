@@ -54,6 +54,9 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\kernel_stl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\HyperPlatform\HyperPlatform\powercallback.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="memorymon.h">
@@ -99,6 +102,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\util_page_constants.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\HyperPlatform\HyperPlatform\powercallback.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
