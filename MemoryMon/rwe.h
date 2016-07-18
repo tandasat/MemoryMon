@@ -2,10 +2,11 @@
 // Use of this source code is governed by a MIT-style license that can be
 // found in the LICENSE file.
 
-// Declares extended code as MemoryMon
+/// @file
+/// Declares interfaces to RWE functions.
 
-#ifndef MEMORYMON_MEMORYMON_H_
-#define MEMORYMON_MEMORYMON_H_
+#ifndef MEMORYMON_RWE_H_
+#define MEMORYMON_RWE_H_
 
 #include <fltKernel.h>
 
@@ -25,16 +26,29 @@ extern "C" {
 // types
 //
 
+struct EptData;
+
+struct AddressRange {
+  ULONG_PTR start_address;  // inclusive
+  ULONG_PTR end_address;    // inclusive
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
 
-_IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS MmonInitialization();
+NTSTATUS RweInitialization();
+void RweTermination();
+void RweAddSrcRange(const AddressRange& range);
+void RweAddDstRange(const AddressRange& range);
+bool RweIsInsideSrcRange(ULONG_PTR address);
+bool RweIsInsideDstRange(ULONG_PTR address);
 
-_IRQL_requires_max_(PASSIVE_LEVEL) void MmonTermination();
-
-void *MmonGetPfnDatabase();
+void RweHandleEptViolation(EptData* ept_data, ULONG_PTR guest_ip,
+  ULONG_PTR fault_va, bool read_violation,
+  bool write_violation, bool execute_violation);
+void RweHandleMonitorTrapFlag();
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -48,4 +62,4 @@ void *MmonGetPfnDatabase();
 
 }  // extern "C"
 
-#endif  // MEMORYMON_MEMORYMON_H_
+#endif  // MEMORYMON_RWE_H_

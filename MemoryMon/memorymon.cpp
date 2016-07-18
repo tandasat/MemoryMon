@@ -42,7 +42,6 @@ _IRQL_requires_max_(PASSIVE_LEVEL) static NTSTATUS
 #pragma alloc_text(INIT, MmonInitialization)
 #pragma alloc_text(PAGE, MmonTermination)
 #pragma alloc_text(INIT, MmonpInitializeMmPfnDatabase)
-#pragma alloc_text(INIT, MmonExecuteDoggyRegion)
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -66,9 +65,6 @@ _Use_decl_annotations_ NTSTATUS MmonInitialization() {
   if (!NT_SUCCESS(status)) {
     return status;
   }
-
-  // This execution should NOT be detected since a system is not virtualized yet
-  MmonExecuteDoggyRegion();
   return STATUS_SUCCESS;
 }
 
@@ -182,37 +178,6 @@ _Use_decl_annotations_ static NTSTATUS MmonpInitializeMmPfnDatabase() {
 // Returns the MmPfnDatabase
 /*_Use_decl_annotations_*/ void *MmonGetPfnDatabase() {
   return g_mmonp_MmPfnDatabase;
-}
-
-// Execute a non-image region as a test
-_Use_decl_annotations_ void MmonExecuteDoggyRegion() {
-  PAGED_CODE();
-
-#pragma prefast(suppress : 30030, "Allocating executable POOL_TYPE memory")
-  auto code = reinterpret_cast<UCHAR *>(ExAllocatePoolWithTag(
-      NonPagedPoolExecute, PAGE_SIZE, kHyperPlatformCommonPoolTag));
-
-  if (!code) {
-    return;
-  }
-  RtlZeroMemory(code, PAGE_SIZE);
-  HYPERPLATFORM_LOG_DEBUG("PoolCode = %p, Pa = %016llx", code,
-                          UtilPaFromVa(code));
-  code[0] = 0x90;  // nop
-  code[1] = 0x90;  // nop
-  if (IsX64()) {
-    code[2] = 0xc3;  // ret
-  } else {
-    code[2] = 0xc2;
-    code[3] = 0x04;  // retn 4
-  }
-  KeInvalidateAllCaches();
-
-  // Runs code on all processors at once
-  auto function = reinterpret_cast<PKIPI_BROADCAST_WORKER>(code);
-  KeIpiGenericCall(function, 0);
-
-  ExFreePoolWithTag(code, kHyperPlatformCommonPoolTag);
 }
 
 }  // extern "C"

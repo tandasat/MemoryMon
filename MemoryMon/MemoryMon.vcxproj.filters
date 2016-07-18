@@ -57,6 +57,9 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\powercallback.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="rwe.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="memorymon.h">
@@ -105,6 +108,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\powercallback.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="rwe.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
