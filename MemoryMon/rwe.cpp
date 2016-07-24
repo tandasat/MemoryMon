@@ -15,6 +15,7 @@
 #include "../HyperPlatform/HyperPlatform/vmm.h"
 #include "../HyperPlatform/HyperPlatform/kernel_stl.h"
 #include <vector>
+#include <array>
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -47,8 +48,6 @@ struct AddressRange {
 // variables
 //
 
-static bool g_rewp_is_enabled = false;
-
 static std::vector<AddressRange>* g_rwep_src_ranges;
 static std::vector<AddressRange>* g_rwep_dst_ranges;
 
@@ -59,17 +58,71 @@ struct rwe_last_info {
   ULONG_PTR guest_ip;
   ULONG_PTR fault_va;
   EptCommonEntry* ept_entry;
-  UCHAR old_bytes[16];  // memmove uses xmmN which is 128 bits
-  // ZMM registers on AVX-512 are 512 bits
+  std::array<UCHAR, 16> old_bytes;
+  // memmove uses xmmN which is 128 bits
+  // zmmN registers on AVX-512 are 512 bits
 };
-static rwe_last_info g_last_info;
+static rwe_last_info g_rwep_last_info;
+
+struct VitualAndPhysicalMap {
+  void* va;
+  ULONG64 pa;
+};
+static std::vector<VitualAndPhysicalMap>* g_rwep_vp_maps;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 // implementations
 //
 
+static bool RwepExecuteSystemMemoryListOperation(
+    ULONG memory_operation_number) {
+  typedef NTSTATUS(NTAPI * NtSetSystemInformationType)(
+      __in ULONG /*SYSTEM_INFORMATION_CLASS*/ SystemInformationClass,
+      __inout PVOID SystemInformation, __in ULONG SystemInformationLength);
+
+  static const ULONG SystemMemoryListInformation = 0x50;
+
+  static const auto NtSetSystemInformationPtr =
+      reinterpret_cast<NtSetSystemInformationType>(
+          UtilGetSystemProcAddress(L"ZwSetSystemInformation"));
+  NT_ASSERT(NtSetSystemInformationPtr);
+
+  NTSTATUS status = NtSetSystemInformationPtr(SystemMemoryListInformation,
+                                              &memory_operation_number,
+                                              sizeof(memory_operation_number));
+  return NT_SUCCESS(status);
+}
+
+static bool RwepMmEmptyAllWorkingSets() {
+  return RwepExecuteSystemMemoryListOperation(2);
+}
+
+static bool RwepMmFlushAllPages() {
+  return RwepExecuteSystemMemoryListOperation(3);
+}
+
+static bool RwepMiPurgeTransitionList() {
+  return (RwepExecuteSystemMemoryListOperation(4) &&
+          RwepExecuteSystemMemoryListOperation(5));
+}
+
+static bool RwepPageOut() {
+  if (!RwepMmEmptyAllWorkingSets()) {
+    return false;
+  }
+  if (!RwepMmFlushAllPages()) {
+    return false;
+  }
+  if (!RwepMiPurgeTransitionList()) {
+    return false;
+  }
+  return true;
+}
+
 #pragma section("SRC", read, execute)
+//#pragma comment(linker, "/section:SRC,ERP")
+static void RwepTestCode(UCHAR* ptr);
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text("SRC", RwepTestCode)
 #endif
@@ -78,7 +131,7 @@ static rwe_last_info g_last_info;
 //__declspec(allocate("DST"))
 // static UCHAR g_rwep_test_buffer[100] = {};
 
-void RwepTestCode() {
+static void RwepTestCode(UCHAR* ptr) {
   const auto not_present = *KdDebuggerNotPresent;
   if (not_present) {
     // none
@@ -88,7 +141,42 @@ void RwepTestCode() {
   }
   *KdDebuggerNotPresent = 0xff;
   *KdDebuggerNotPresent = not_present;
-  __debugbreak();
+  //__debugbreak();
+  if (ptr) {
+    const auto now = *ptr;
+    *ptr = now + 1;
+  }
+}
+
+void RweTestCode() {
+  HYPERPLATFORM_COMMON_DBG_BREAK();
+
+  RweAddSrcRange((ULONG_PTR)&RwepTestCode, PAGE_SIZE);
+  RweAddDstRange((ULONG_PTR)&DbgPrintEx, 1);
+  RweAddDstRange((ULONG_PTR)KdDebuggerNotPresent, 1);
+
+  const auto stuff = reinterpret_cast<UCHAR*>(
+      ExAllocatePoolWithTag(PagedPool, PAGE_SIZE, kHyperPlatformCommonPoolTag));
+  NT_ASSERT(stuff);
+  NT_VERIFY(RwepPageOut());
+  RtlZeroMemory(stuff, PAGE_SIZE);
+  RweAddDstRange((ULONG_PTR)stuff, PAGE_SIZE);
+
+  RweApplyRanges();
+
+  RwepTestCode(nullptr);
+  HYPERPLATFORM_LOG_DEBUG("Cool");
+  HYPERPLATFORM_COMMON_DBG_BREAK();
+  RwepTestCode(stuff);
+  HYPERPLATFORM_LOG_DEBUG("Byte = %02x", *stuff);
+
+  NT_VERIFY(RwepPageOut());
+  HYPERPLATFORM_COMMON_DBG_BREAK();
+  RwepTestCode(stuff);
+  HYPERPLATFORM_LOG_DEBUG("Byte = %02x", *stuff);
+  HYPERPLATFORM_COMMON_DBG_BREAK();
+
+  ExFreePoolWithTag(stuff, kHyperPlatformCommonPoolTag);
 }
 
 NTSTATUS RweInitialization() {
@@ -97,17 +185,37 @@ NTSTATUS RweInitialization() {
   KeInitializeSpinLock(&g_rwep_src_ranges_spinlock);
   KeInitializeSpinLock(&g_rwep_dst_ranges_spinlock);
 
-  g_rewp_is_enabled = true;
+  g_rwep_vp_maps = new std::vector<VitualAndPhysicalMap>();
   return STATUS_SUCCESS;
 }
 
 void RweTermination() {
-  g_rewp_is_enabled = false;
+  delete g_rwep_vp_maps;
 
   delete g_rwep_dst_ranges;
   delete g_rwep_src_ranges;
 }
 
+//
+void RewpAddToMap(const AddressRange& range) {
+  auto& vp_maps = g_rwep_vp_maps;
+
+  const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+      range.start_address, range.end_address - range.start_address + 1);
+  for (auto page_index = 0ul; page_index < pages; ++page_index) {
+    const auto va_base =
+        PAGE_ALIGN(range.start_address + PAGE_SIZE * page_index);
+    const auto pa_base = UtilPaFromVa(va_base);
+    VitualAndPhysicalMap map = {va_base, pa_base};
+    vp_maps->push_back(map);
+
+    HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", map.va, map.pa);
+  }
+}
+
+//
+// Range Manipulation
+//
 void RweAddSrcRange(ULONG_PTR address, SIZE_T size) {
   AddressRange range = {address, address + size - 1};
   HYPERPLATFORM_LOG_DEBUG_SAFE("Add SRC rabge: %p - %p", range.start_address,
@@ -120,6 +228,8 @@ void RweAddSrcRange(ULONG_PTR address, SIZE_T size) {
   g_rwep_src_ranges->push_back(range);
 
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
+
+  RewpAddToMap(range);
 }
 
 void RweAddDstRange(ULONG_PTR address, SIZE_T size) {
@@ -134,6 +244,8 @@ void RweAddDstRange(ULONG_PTR address, SIZE_T size) {
   g_rwep_dst_ranges->push_back(range);
 
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
+
+  RewpAddToMap(range);
 }
 
 bool RweIsInsideSrcRange(ULONG_PTR address) {
@@ -170,10 +282,38 @@ bool RweIsInsideDstRange(ULONG_PTR address) {
   return inside;
 }
 
-//
-//
-//
+// Make all non-executable for MONITOR
+void RweSetDefaultEptAttributes(ProcessorData* processor_data) {
+  const auto pm_ranges = UtilGetPhysicalMemoryRanges();
+  for (auto run_index = 0ul; run_index < pm_ranges->number_of_runs;
+       ++run_index) {
+    const auto run = &pm_ranges->run[run_index];
+    const auto base_addr = run->base_page * PAGE_SIZE;
+    for (auto page_index = 0ull; page_index < run->page_count; ++page_index) {
+      const auto indexed_addr = base_addr + page_index * PAGE_SIZE;
+      const auto ept_entry =
+          EptGetEptPtEntry(processor_data->ept_data_monitor, indexed_addr);
 
+      ept_entry->fields.execute_access = false;
+    }
+  }
+  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RWE D:RWE O:RWE *");
+  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RW- D:RW- O:RW- *");
+}
+
+// Apply ranges to EPT attributes
+void RweApplyRanges() {
+  UtilForEachProcessor(
+      [](void* context) {
+        UNREFERENCED_PARAMETER(context);
+        return UtilVmCall(HypercallNumber::kRweApplyRanges, nullptr);
+      },
+      nullptr);
+}
+
+//
+// VMM code
+//
 static void RweSwtichToNormalMode(_Inout_ ProcessorData* processor_data) {
   processor_data->ept_data = processor_data->ept_data_normal;
   UtilVmWrite64(VmcsField::kEptPointer,
@@ -195,6 +335,8 @@ static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
   if (RweIsInsideSrcRange(fault_va)) {
     // Someone is entering a source range
 
+    // RweHandleTlbFlush(processor_data);
+
     // Currently
     //        E   RW
     //  Src   x   o
@@ -209,22 +351,6 @@ static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
     //  Oth   x   o
     RwepSwitchToMonitoringMode(processor_data);
 
-    // const auto ept_m = EptGetEptPtEntry(
-    //  processor_data->ept_data_monitor,
-    //  UtilVmRead64(VmcsField::kGuestPhysicalAddress));
-    // const auto ept_n = EptGetEptPtEntry(
-    //  processor_data->ept_data_normal,
-    //  UtilVmRead64(VmcsField::kGuestPhysicalAddress));
-    // const auto ept_c = EptGetEptPtEntry(
-    //  processor_data->ept_data,
-    //  UtilVmRead64(VmcsField::kGuestPhysicalAddress));
-
-    // UNREFERENCED_PARAMETER(ept_m);
-    // UNREFERENCED_PARAMETER(ept_n);
-    // UNREFERENCED_PARAMETER(ept_c);
-    // HYPERPLATFORM_COMMON_DBG_BREAK();
-
-    // FIXME: return_address is not reliable source.
     // const auto guest_sp =
     //  reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
     // const auto return_address = *guest_sp;
@@ -269,8 +395,8 @@ static void RewpSetMonitorTrapFlag(bool enable) {
   UtilVmWrite(VmcsField::kCpuBasedVmExecControl, vm_procctl.all);
 }
 
-static void RewpAllowReadWriteOnPage(bool allow_read_write,
-                                     EptCommonEntry* ept_entry) {
+static void RewpSetReadWriteOnPage(bool allow_read_write,
+                                   EptCommonEntry* ept_entry) {
   ept_entry->fields.write_access = allow_read_write;
   ept_entry->fields.read_access = allow_read_write;
   UtilInveptAll();
@@ -278,6 +404,9 @@ static void RewpAllowReadWriteOnPage(bool allow_read_write,
 
 static void RewpHandleReadWriteViolation(EptData* ept_data, ULONG_PTR guest_ip,
                                          ULONG_PTR fault_va, bool is_write) {
+  auto& last_info = g_rwep_last_info;
+  NT_ASSERT(!last_info.ept_entry);
+
   // Read or write from a source range to a dest range
   NT_ASSERT(RweIsInsideSrcRange(guest_ip));
 
@@ -298,26 +427,26 @@ static void RewpHandleReadWriteViolation(EptData* ept_data, ULONG_PTR guest_ip,
   //  Src   o   o
   //  Dst   x   o
   //  Oth   x   o
-  RewpAllowReadWriteOnPage(true, ept_entry);
+  RewpSetReadWriteOnPage(true, ept_entry);
   HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
                                PAGE_ALIGN(fault_va));
   RewpSetMonitorTrapFlag(true);
 
-  g_last_info.ept_entry = ept_entry;
+  last_info.ept_entry = ept_entry;
   if (is_write) {
-    g_last_info.guest_ip = guest_ip;
-    g_last_info.fault_va = fault_va;
+    last_info.guest_ip = guest_ip;
+    last_info.fault_va = fault_va;
     const auto current_cr3 = __readcr3();
     const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
     __writecr3(guest_cr3);
-    RtlCopyMemory(g_last_info.old_bytes, reinterpret_cast<void*>(fault_va),
-                  sizeof(g_last_info.old_bytes));
+    RtlCopyMemory(last_info.old_bytes.data(), reinterpret_cast<void*>(fault_va),
+                  last_info.old_bytes.size());
     __writecr3(current_cr3);
 
   } else {
-    g_last_info.guest_ip = 0;
-    g_last_info.fault_va = 0;
-    RtlZeroMemory(g_last_info.old_bytes, sizeof(g_last_info.old_bytes));
+    last_info.guest_ip = 0;
+    last_info.fault_va = 0;
+    RtlZeroMemory(last_info.old_bytes.data(), last_info.old_bytes.size());
     HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= R", guest_ip, fault_va);
   }
 }
@@ -341,33 +470,35 @@ void RweHandleEptViolation(_Inout_ ProcessorData* processor_data,
 
 void RweHandleMonitorTrapFlag() {
   // HYPERPLATFORM_COMMON_DBG_BREAK();
+  auto& last_info = g_rwep_last_info;
+  NT_ASSERT(last_info.ept_entry);
 
   // Revert to
   //        E   RW
   //  Src   o   o
   //  Dst   x   x
   //  Oth   x   o
-  RewpAllowReadWriteOnPage(false, g_last_info.ept_entry);
+  RewpSetReadWriteOnPage(false, last_info.ept_entry);
   HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p",
-                               PAGE_ALIGN(g_last_info.fault_va));
+                               PAGE_ALIGN(last_info.fault_va));
   RewpSetMonitorTrapFlag(false);
 
   // was the last access write?
-  if (g_last_info.guest_ip) {
-    char old_bytes_string[3 * sizeof(g_last_info.old_bytes)];
-    for (auto i = 0ul; i < sizeof(g_last_info.old_bytes); ++i) {
+  if (last_info.guest_ip) {
+    char old_bytes_string[3 * sizeof(last_info.old_bytes)];
+    for (auto i = 0ul; i < sizeof(last_info.old_bytes); ++i) {
       const auto consumed_bytes = i * 3;
       const auto buffer_size = sizeof(old_bytes_string) - consumed_bytes;
       RtlStringCchPrintfA(old_bytes_string + consumed_bytes, buffer_size,
-                          "%02x ", g_last_info.old_bytes[i]);
+                          "%02x ", last_info.old_bytes[i]);
     }
     old_bytes_string[sizeof(old_bytes_string) - 1] = '\0';
 
-    UCHAR current_bytes[sizeof(g_last_info.old_bytes)];
+    UCHAR current_bytes[sizeof(last_info.old_bytes)];
     const auto current_cr3 = __readcr3();
     const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
     __writecr3(guest_cr3);
-    RtlCopyMemory(current_bytes, reinterpret_cast<void*>(g_last_info.fault_va),
+    RtlCopyMemory(current_bytes, reinterpret_cast<void*>(last_info.fault_va),
                   sizeof(current_bytes));
     __writecr3(current_cr3);
 
@@ -381,49 +512,35 @@ void RweHandleMonitorTrapFlag() {
     current_bytes_string[sizeof(current_bytes_string) - 1] = '\0';
 
     HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= W, %s => %s",
-                                g_last_info.guest_ip, g_last_info.fault_va,
+                                last_info.guest_ip, last_info.fault_va,
                                 old_bytes_string, current_bytes_string);
+
+    last_info.guest_ip = 0;
+    last_info.fault_va = 0;
+    RtlZeroMemory(last_info.old_bytes.data(), last_info.old_bytes.size());
   }
-}
-
-// Make all non-executable for MONITOR
-void RweSetDefaultEptAttributes(ProcessorData* processor_data) {
-  const auto pm_ranges = UtilGetPhysicalMemoryRanges();
-  for (auto run_index = 0ul; run_index < pm_ranges->number_of_runs;
-       ++run_index) {
-    const auto run = &pm_ranges->run[run_index];
-    const auto base_addr = run->base_page * PAGE_SIZE;
-    for (auto page_index = 0ull; page_index < run->page_count; ++page_index) {
-      const auto indexed_addr = base_addr + page_index * PAGE_SIZE;
-      const auto ept_entry =
-          EptGetEptPtEntry(processor_data->ept_data_monitor, indexed_addr);
-
-      ept_entry->fields.execute_access = false;
-    }
-  }
-  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RWE D:RWE O:RWE *");
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RW- D:RW- O:RW- *");
-}
-
-// Apply ranges to EPT attributes
-void RweApplyRanges() {
-  UtilForEachProcessor(
-      [](void* context) {
-        UNREFERENCED_PARAMETER(context);
-        return UtilVmCall(HypercallNumber::kRweApplyRanges, nullptr);
-      },
-      nullptr);
+  last_info.ept_entry = nullptr;
 }
 
 // Apply ranges to EPT attributes
 void RweVmcallApplyRanges(ProcessorData* processor_data) {
+  NT_ASSERT(processor_data->ept_data == processor_data->ept_data_normal);
+
+  // Make source ranges non-executable for normal pages and executable for
+  // monitor pages
   for (const auto& src_ragne : *g_rwep_src_ranges) {
-    const auto pages =
-        BYTES_TO_PAGES(src_ragne.end_address - src_ragne.start_address + 1);
+    const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+        src_ragne.start_address,
+        src_ragne.end_address - src_ragne.start_address + 1);
     for (auto page_index = 0ul; page_index < pages; ++page_index) {
       const auto va = src_ragne.start_address + PAGE_SIZE * page_index;
       const auto pa = UtilPaFromVa(reinterpret_cast<void*>(va));
-      NT_ASSERT(pa);
+      if (!pa) {
+        HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.",
+                                     va);
+        continue;
+      }
+
       const auto ept_entry_n =
           EptGetEptPtEntry(processor_data->ept_data_normal, pa);
       ept_entry_n->fields.execute_access = false;
@@ -439,13 +556,20 @@ void RweVmcallApplyRanges(ProcessorData* processor_data) {
     }
   }
 
+  // Make dest ranges non-readable/writable/executable for monitor pages
   for (const auto& dst_ragne : *g_rwep_dst_ranges) {
-    const auto pages =
-        BYTES_TO_PAGES(dst_ragne.end_address - dst_ragne.start_address + 1);
+    const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+        dst_ragne.start_address,
+        dst_ragne.end_address - dst_ragne.start_address + 1);
     for (auto page_index = 0ul; page_index < pages; ++page_index) {
       const auto va = dst_ragne.start_address + PAGE_SIZE * page_index;
       const auto pa = UtilPaFromVa(reinterpret_cast<void*>(va));
-      NT_ASSERT(pa);
+      if (!pa) {
+        HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.",
+                                     va);
+        continue;
+      }
+
       const auto ept_entry =
           EptGetEptPtEntry(processor_data->ept_data_monitor, pa);
       ept_entry->fields.execute_access = false;
@@ -457,6 +581,45 @@ void RweVmcallApplyRanges(ProcessorData* processor_data) {
   }
 
   UtilInveptAll();
+}
+
+void RweHandleTlbFlush(ProcessorData* processor_data) {
+  auto& vp_maps = g_rwep_vp_maps;
+  bool need_refresh = false;
+
+  for (auto& map : *vp_maps) {
+    NT_ASSERT(map.va == PAGE_ALIGN(map.va));
+    NT_ASSERT(map.pa == (ULONG64)PAGE_ALIGN(map.pa));
+    const auto new_pa = UtilPaFromVa(map.va);
+    if (new_pa != map.pa) {
+      need_refresh = true;
+
+      if (map.pa) {
+        const auto old_ept_entry_n =
+            EptGetEptPtEntry(processor_data->ept_data_normal, map.pa);
+        const auto old_ept_entry_m =
+            EptGetEptPtEntry(processor_data->ept_data_monitor, map.pa);
+        NT_ASSERT(old_ept_entry_n && old_ept_entry_n->all);
+        NT_ASSERT(old_ept_entry_m && old_ept_entry_m->all);
+
+        old_ept_entry_n->fields.read_access = true;
+        old_ept_entry_n->fields.write_access = true;
+        old_ept_entry_n->fields.execute_access = true;
+        old_ept_entry_m->fields.read_access = true;
+        old_ept_entry_m->fields.write_access = true;
+        // monitor pages are not executable by default
+        old_ept_entry_m->fields.execute_access = false;
+      }
+
+      HYPERPLATFORM_LOG_DEBUG_SAFE("Map: V:%p P:%p => %p", map.va, map.pa,
+                                   new_pa);
+      map.pa = new_pa;
+    }
+  }
+
+  if (need_refresh) {
+    RweVmcallApplyRanges(processor_data);
+  }
 }
 
 }  // extern "C"
