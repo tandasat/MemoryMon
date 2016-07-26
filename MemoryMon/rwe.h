@@ -55,6 +55,9 @@ void RweVmcallApplyRanges(ProcessorData* processor_data);
 
 void RweHandleTlbFlush(ProcessorData* processor_data);
 
+void PageFaultpHanlePageFault(void* guest_ip, ULONG_PTR fault_address);
+bool PageFaultpHandleBreakpoint(void* guest_ip, ProcessorData* processor_data);
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // variables

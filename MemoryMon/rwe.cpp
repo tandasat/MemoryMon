@@ -70,6 +70,8 @@ struct VitualAndPhysicalMap {
 };
 static std::vector<VitualAndPhysicalMap>* g_rwep_vp_maps;
 
+static void* g_ptr;
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // implementations
@@ -108,6 +110,7 @@ static bool RwepMiPurgeTransitionList() {
 }
 
 static bool RwepPageOut() {
+  HYPERPLATFORM_LOG_INFO_SAFE("Paging out. Could be slow.");
   if (!RwepMmEmptyAllWorkingSets()) {
     return false;
   }
@@ -121,23 +124,32 @@ static bool RwepPageOut() {
 }
 
 #pragma section("SRC", read, execute)
-//#pragma comment(linker, "/section:SRC,ERP")
+
+#pragma comment(linker, "/section:SRC2,P")
+
 static void RwepTestCode(UCHAR* ptr);
+static void RwepTestCode2();
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text("SRC", RwepTestCode)
+#pragma alloc_text(PAGE__, RwepTestCode2)
 #endif
 
 //#pragma section("DST", read)
 //__declspec(allocate("DST"))
 // static UCHAR g_rwep_test_buffer[100] = {};
 
+static void RwepTestCode2() {
+  PAGED_CODE();
+  HYPERPLATFORM_LOG_INFO_SAFE("Hello from %s", __FUNCTION__);
+}
+
 static void RwepTestCode(UCHAR* ptr) {
   const auto not_present = *KdDebuggerNotPresent;
   if (not_present) {
-    // none
+    NOTHING;
   } else {
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "Debugger Not Present = %d\n", not_present);
+    HYPERPLATFORM_LOG_INFO_SAFE("Hello from %s (*KdDebuggerNotPresent = %d)",
+                                __FUNCTION__, not_present);
   }
   *KdDebuggerNotPresent = 0xff;
   *KdDebuggerNotPresent = not_present;
@@ -152,11 +164,15 @@ void RweTestCode() {
   HYPERPLATFORM_COMMON_DBG_BREAK();
 
   RweAddSrcRange((ULONG_PTR)&RwepTestCode, PAGE_SIZE);
+  RweAddSrcRange((ULONG_PTR)&RwepTestCode2, PAGE_SIZE);
+
   RweAddDstRange((ULONG_PTR)&DbgPrintEx, 1);
   RweAddDstRange((ULONG_PTR)KdDebuggerNotPresent, 1);
 
   const auto stuff = reinterpret_cast<UCHAR*>(
       ExAllocatePoolWithTag(PagedPool, PAGE_SIZE, kHyperPlatformCommonPoolTag));
+  g_ptr = stuff;
+
   NT_ASSERT(stuff);
   NT_VERIFY(RwepPageOut());
   RtlZeroMemory(stuff, PAGE_SIZE);
@@ -172,6 +188,7 @@ void RweTestCode() {
 
   NT_VERIFY(RwepPageOut());
   HYPERPLATFORM_COMMON_DBG_BREAK();
+  RwepTestCode2();
   RwepTestCode(stuff);
   HYPERPLATFORM_LOG_DEBUG("Byte = %02x", *stuff);
   HYPERPLATFORM_COMMON_DBG_BREAK();
@@ -351,11 +368,12 @@ static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
     //  Oth   x   o
     RwepSwitchToMonitoringMode(processor_data);
 
-    // const auto guest_sp =
-    //  reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
-    // const auto return_address = *guest_sp;
-    // HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= E", return_address,
-    // fault_va);
+    const auto guest_sp =
+        reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
+    const auto return_address = *guest_sp;
+    // TODO: IsExecutable?
+    HYPERPLATFORM_LOG_INFO_SAFE("R= %p, D= %p, T= E", return_address, fault_va);
+
   } else {
     // Presumably, someone is leaving a source range
 
@@ -451,10 +469,9 @@ static void RewpHandleReadWriteViolation(EptData* ept_data, ULONG_PTR guest_ip,
   }
 }
 
-void RweHandleEptViolation(_Inout_ ProcessorData* processor_data,
-                           ULONG_PTR guest_ip, ULONG_PTR fault_va,
-                           bool read_violation, bool write_violation,
-                           bool execute_violation) {
+void RweHandleEptViolation(ProcessorData* processor_data, ULONG_PTR guest_ip,
+                           ULONG_PTR fault_va, bool read_violation,
+                           bool write_violation, bool execute_violation) {
   // HYPERPLATFORM_COMMON_DBG_BREAK();
 
   if (execute_violation) {
@@ -620,6 +637,52 @@ void RweHandleTlbFlush(ProcessorData* processor_data) {
   if (need_refresh) {
     RweVmcallApplyRanges(processor_data);
   }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+static ULONG_PTR g_pfp_last_ip;
+
+#pragma section(".asm", read, execute)
+__declspec(allocate(".asm")) static const UCHAR PageFaultpBreakPoint[] = {0xcc};
+
+void PageFaultpHanlePageFault(void* guest_ip, ULONG_PTR fault_address) {
+  UNREFERENCED_PARAMETER(guest_ip);
+  UNREFERENCED_PARAMETER(fault_address);
+
+  if ((ULONG_PTR)g_ptr == fault_address) {
+    // HYPERPLATFORM_COMMON_DBG_BREAK();
+  }
+
+  if (guest_ip < MmSystemRangeStart) {
+    return;
+  }
+  if (g_pfp_last_ip) {
+    return;
+  }
+
+  // Update guest's IP
+  UtilVmWrite(VmcsField::kGuestRip, (ULONG_PTR)&PageFaultpBreakPoint);
+
+  NT_ASSERT(!g_pfp_last_ip);
+  g_pfp_last_ip = (ULONG_PTR)guest_ip;
+}
+
+bool PageFaultpHandleBreakpoint(void* guest_ip, ProcessorData* processor_data) {
+  if (guest_ip != PageFaultpBreakPoint) {
+    return false;
+  }
+
+  // HYPERPLATFORM_COMMON_DBG_BREAK();
+
+  NT_ASSERT(g_pfp_last_ip);
+  const auto original_ip = g_pfp_last_ip;
+  g_pfp_last_ip = 0;
+
+  // Update guest's IP
+  UtilVmWrite(VmcsField::kGuestRip, original_ip);
+  RweHandleTlbFlush(processor_data);
+  return true;
 }
 
 }  // extern "C"
