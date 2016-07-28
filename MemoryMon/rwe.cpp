@@ -28,6 +28,10 @@ extern "C" {
 // constants and macros
 //
 
+// memmove uses xmmN which is 128 bits
+// zmmN registers on AVX-512 are 512 bits
+static const auto kRwepWriteMonitorSize = 16;
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // types
@@ -36,6 +40,18 @@ extern "C" {
 struct AddressRange {
   ULONG_PTR start_address;  // inclusive
   ULONG_PTR end_address;    // inclusive
+};
+
+struct rwe_last_info {
+  ULONG_PTR guest_ip;
+  ULONG_PTR fault_va;
+  EptCommonEntry* ept_entry;
+  std::array<UCHAR, kRwepWriteMonitorSize> old_bytes;
+};
+
+struct VitualAndPhysicalMap {
+  void* va;
+  ULONG64 pa;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -48,170 +64,28 @@ struct AddressRange {
 // variables
 //
 
-static std::vector<AddressRange>* g_rwep_src_ranges;
-static std::vector<AddressRange>* g_rwep_dst_ranges;
+static std::vector<AddressRange> g_rwep_src_ranges;
+static std::vector<AddressRange> g_rwep_dst_ranges;
 
 static KSPIN_LOCK g_rwep_src_ranges_spinlock;
 static KSPIN_LOCK g_rwep_dst_ranges_spinlock;
 
-struct rwe_last_info {
-  ULONG_PTR guest_ip;
-  ULONG_PTR fault_va;
-  EptCommonEntry* ept_entry;
-  std::array<UCHAR, 16> old_bytes;
-  // memmove uses xmmN which is 128 bits
-  // zmmN registers on AVX-512 are 512 bits
-};
 static rwe_last_info g_rwep_last_info;
 
-struct VitualAndPhysicalMap {
-  void* va;
-  ULONG64 pa;
-};
-static std::vector<VitualAndPhysicalMap>* g_rwep_vp_maps;
-
-static void* g_ptr;
+static std::vector<VitualAndPhysicalMap> g_rwep_vp_maps;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 // implementations
 //
 
-static bool RwepExecuteSystemMemoryListOperation(
-    ULONG memory_operation_number) {
-  typedef NTSTATUS(NTAPI * NtSetSystemInformationType)(
-      __in ULONG /*SYSTEM_INFORMATION_CLASS*/ SystemInformationClass,
-      __inout PVOID SystemInformation, __in ULONG SystemInformationLength);
-
-  static const ULONG SystemMemoryListInformation = 0x50;
-
-  static const auto NtSetSystemInformationPtr =
-      reinterpret_cast<NtSetSystemInformationType>(
-          UtilGetSystemProcAddress(L"ZwSetSystemInformation"));
-  NT_ASSERT(NtSetSystemInformationPtr);
-
-  NTSTATUS status = NtSetSystemInformationPtr(SystemMemoryListInformation,
-                                              &memory_operation_number,
-                                              sizeof(memory_operation_number));
-  return NT_SUCCESS(status);
-}
-
-static bool RwepMmEmptyAllWorkingSets() {
-  return RwepExecuteSystemMemoryListOperation(2);
-}
-
-static bool RwepMmFlushAllPages() {
-  return RwepExecuteSystemMemoryListOperation(3);
-}
-
-static bool RwepMiPurgeTransitionList() {
-  return (RwepExecuteSystemMemoryListOperation(4) &&
-          RwepExecuteSystemMemoryListOperation(5));
-}
-
-static bool RwepPageOut() {
-  HYPERPLATFORM_LOG_INFO_SAFE("Paging out. Could be slow.");
-  if (!RwepMmEmptyAllWorkingSets()) {
-    return false;
-  }
-  if (!RwepMmFlushAllPages()) {
-    return false;
-  }
-  if (!RwepMiPurgeTransitionList()) {
-    return false;
-  }
-  return true;
-}
-
-#pragma section("SRC", read, execute)
-
-#pragma comment(linker, "/section:SRC2,P")
-
-static void RwepTestCode(UCHAR* ptr);
-static void RwepTestCode2();
-#if defined(ALLOC_PRAGMA)
-#pragma alloc_text("SRC", RwepTestCode)
-#pragma alloc_text(PAGE__, RwepTestCode2)
-#endif
-
-//#pragma section("DST", read)
-//__declspec(allocate("DST"))
-// static UCHAR g_rwep_test_buffer[100] = {};
-
-static void RwepTestCode2() {
-  PAGED_CODE();
-  HYPERPLATFORM_LOG_INFO_SAFE("Hello from %s", __FUNCTION__);
-}
-
-static void RwepTestCode(UCHAR* ptr) {
-  const auto not_present = *KdDebuggerNotPresent;
-  if (not_present) {
-    NOTHING;
-  } else {
-    HYPERPLATFORM_LOG_INFO_SAFE("Hello from %s (*KdDebuggerNotPresent = %d)",
-                                __FUNCTION__, not_present);
-  }
-  *KdDebuggerNotPresent = 0xff;
-  *KdDebuggerNotPresent = not_present;
-  //__debugbreak();
-  if (ptr) {
-    const auto now = *ptr;
-    *ptr = now + 1;
-  }
-}
-
-void RweTestCode() {
-  HYPERPLATFORM_COMMON_DBG_BREAK();
-
-  RweAddSrcRange((ULONG_PTR)&RwepTestCode, PAGE_SIZE);
-  RweAddSrcRange((ULONG_PTR)&RwepTestCode2, PAGE_SIZE);
-
-  RweAddDstRange((ULONG_PTR)&DbgPrintEx, 1);
-  RweAddDstRange((ULONG_PTR)KdDebuggerNotPresent, 1);
-
-  const auto stuff = reinterpret_cast<UCHAR*>(
-      ExAllocatePoolWithTag(PagedPool, PAGE_SIZE, kHyperPlatformCommonPoolTag));
-  g_ptr = stuff;
-
-  NT_ASSERT(stuff);
-  NT_VERIFY(RwepPageOut());
-  RtlZeroMemory(stuff, PAGE_SIZE);
-  RweAddDstRange((ULONG_PTR)stuff, PAGE_SIZE);
-
-  RweApplyRanges();
-
-  RwepTestCode(nullptr);
-  HYPERPLATFORM_LOG_DEBUG("Cool");
-  HYPERPLATFORM_COMMON_DBG_BREAK();
-  RwepTestCode(stuff);
-  HYPERPLATFORM_LOG_DEBUG("Byte = %02x", *stuff);
-
-  NT_VERIFY(RwepPageOut());
-  HYPERPLATFORM_COMMON_DBG_BREAK();
-  RwepTestCode2();
-  RwepTestCode(stuff);
-  HYPERPLATFORM_LOG_DEBUG("Byte = %02x", *stuff);
-  HYPERPLATFORM_COMMON_DBG_BREAK();
-
-  ExFreePoolWithTag(stuff, kHyperPlatformCommonPoolTag);
-}
-
 NTSTATUS RweInitialization() {
-  g_rwep_src_ranges = new std::vector<AddressRange>();
-  g_rwep_dst_ranges = new std::vector<AddressRange>();
   KeInitializeSpinLock(&g_rwep_src_ranges_spinlock);
   KeInitializeSpinLock(&g_rwep_dst_ranges_spinlock);
-
-  g_rwep_vp_maps = new std::vector<VitualAndPhysicalMap>();
   return STATUS_SUCCESS;
 }
 
-void RweTermination() {
-  delete g_rwep_vp_maps;
-
-  delete g_rwep_dst_ranges;
-  delete g_rwep_src_ranges;
-}
+void RweTermination() {}
 
 //
 void RewpAddToMap(const AddressRange& range) {
@@ -224,7 +98,7 @@ void RewpAddToMap(const AddressRange& range) {
         PAGE_ALIGN(range.start_address + PAGE_SIZE * page_index);
     const auto pa_base = UtilPaFromVa(va_base);
     VitualAndPhysicalMap map = {va_base, pa_base};
-    vp_maps->push_back(map);
+    vp_maps.push_back(map);
 
     HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", map.va, map.pa);
   }
@@ -242,7 +116,7 @@ void RweAddSrcRange(ULONG_PTR address, SIZE_T size) {
   KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_rwep_src_ranges_spinlock,
                                            &lock_handle);
 
-  g_rwep_src_ranges->push_back(range);
+  g_rwep_src_ranges.push_back(range);
 
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
 
@@ -258,7 +132,7 @@ void RweAddDstRange(ULONG_PTR address, SIZE_T size) {
   KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_rwep_dst_ranges_spinlock,
                                            &lock_handle);
 
-  g_rwep_dst_ranges->push_back(range);
+  g_rwep_dst_ranges.push_back(range);
 
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
 
@@ -271,7 +145,7 @@ bool RweIsInsideSrcRange(ULONG_PTR address) {
                                            &lock_handle);
 
   bool inside = false;
-  for (const auto& range : *g_rwep_src_ranges) {
+  for (const auto& range : g_rwep_src_ranges) {
     if (UtilIsInBounds(address, range.start_address, range.end_address)) {
       inside = true;
       break;
@@ -288,7 +162,7 @@ bool RweIsInsideDstRange(ULONG_PTR address) {
                                            &lock_handle);
 
   bool inside = false;
-  for (const auto& range : *g_rwep_dst_ranges) {
+  for (const auto& range : g_rwep_dst_ranges) {
     if (UtilIsInBounds(address, range.start_address, range.end_address)) {
       inside = true;
       break;
@@ -545,7 +419,7 @@ void RweVmcallApplyRanges(ProcessorData* processor_data) {
 
   // Make source ranges non-executable for normal pages and executable for
   // monitor pages
-  for (const auto& src_ragne : *g_rwep_src_ranges) {
+  for (const auto& src_ragne : g_rwep_src_ranges) {
     const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
         src_ragne.start_address,
         src_ragne.end_address - src_ragne.start_address + 1);
@@ -574,7 +448,7 @@ void RweVmcallApplyRanges(ProcessorData* processor_data) {
   }
 
   // Make dest ranges non-readable/writable/executable for monitor pages
-  for (const auto& dst_ragne : *g_rwep_dst_ranges) {
+  for (const auto& dst_ragne : g_rwep_dst_ranges) {
     const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
         dst_ragne.start_address,
         dst_ragne.end_address - dst_ragne.start_address + 1);
@@ -604,7 +478,7 @@ void RweHandleTlbFlush(ProcessorData* processor_data) {
   auto& vp_maps = g_rwep_vp_maps;
   bool need_refresh = false;
 
-  for (auto& map : *vp_maps) {
+  for (auto& map : vp_maps) {
     NT_ASSERT(map.va == PAGE_ALIGN(map.va));
     NT_ASSERT(map.pa == (ULONG64)PAGE_ALIGN(map.pa));
     const auto new_pa = UtilPaFromVa(map.va);
@@ -649,10 +523,6 @@ __declspec(allocate(".asm")) static const UCHAR PageFaultpBreakPoint[] = {0xcc};
 void PageFaultpHanlePageFault(void* guest_ip, ULONG_PTR fault_address) {
   UNREFERENCED_PARAMETER(guest_ip);
   UNREFERENCED_PARAMETER(fault_address);
-
-  if ((ULONG_PTR)g_ptr == fault_address) {
-    // HYPERPLATFORM_COMMON_DBG_BREAK();
-  }
 
   if (guest_ip < MmSystemRangeStart) {
     return;

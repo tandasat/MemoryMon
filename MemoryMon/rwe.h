@@ -33,8 +33,6 @@ struct ProcessorData;
 // prototypes
 //
 
-void RweTestCode();
-
 NTSTATUS RweInitialization();
 void RweTermination();
 

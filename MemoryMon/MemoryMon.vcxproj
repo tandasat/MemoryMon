@@ -131,6 +131,7 @@
     <ClCompile Include="memorymon.cpp" />
     <ClCompile Include="memorymon_ept.cpp" />
     <ClCompile Include="rwe.cpp" />
+    <ClCompile Include="test.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\asm.h" />
@@ -150,6 +151,7 @@
     <ClInclude Include="memorymon.h" />
     <ClInclude Include="memorymon_ept.h" />
     <ClInclude Include="rwe.h" />
+    <ClInclude Include="test.h" />
   </ItemGroup>
   <ItemGroup>
     <MASM Include="..\HyperPlatform\HyperPlatform\Arch\x64\x64.asm">
