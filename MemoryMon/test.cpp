@@ -11,8 +11,6 @@
 #include "../HyperPlatform/HyperPlatform/util.h"
 #include "rwe.h"
 
-//#pragma section("SRC", read, execute)
-
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -34,6 +32,12 @@ extern "C" {
 // prototypes
 //
 
+static bool TestpPageOut();
+static bool TestpMiPurgeTransitionList();
+static bool TestpMmFlushAllPages();
+static bool TestpMmEmptyAllWorkingSets();
+static bool TestpExecuteSystemMemoryListOperation(_In_ ULONG operation_number);
+
 static void TestpRwe1(UCHAR* ptr);
 
 static void TestpRwe2();
@@ -45,6 +49,12 @@ static void TestpRwe2();
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(____TEST, TestpRwe1)
 #pragma alloc_text(PAGETEST, TestpRwe2)
+#pragma alloc_text(PAGE, TestpExecuteSystemMemoryListOperation)
+#pragma alloc_text(PAGE, TestpMmEmptyAllWorkingSets)
+#pragma alloc_text(PAGE, TestpMmFlushAllPages)
+#pragma alloc_text(PAGE, TestpMiPurgeTransitionList)
+#pragma alloc_text(PAGE, TestpPageOut)
+#pragma alloc_text(PAGE, TestRwe)
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -61,8 +71,8 @@ static void TestpRwe2();
 // Support functions
 //
 
-static bool TestpExecuteSystemMemoryListOperation(
-    ULONG memory_operation_number) {
+_Use_decl_annotations_ static bool TestpExecuteSystemMemoryListOperation(
+    ULONG operation_number) {
   PAGED_CODE();
 
   typedef NTSTATUS(NTAPI * NtSetSystemInformationType)(
@@ -76,9 +86,8 @@ static bool TestpExecuteSystemMemoryListOperation(
           UtilGetSystemProcAddress(L"ZwSetSystemInformation"));
   NT_ASSERT(NtSetSystemInformationPtr);
 
-  auto status = NtSetSystemInformationPtr(SystemMemoryListInformation,
-                                          &memory_operation_number,
-                                          sizeof(memory_operation_number));
+  auto status = NtSetSystemInformationPtr(
+      SystemMemoryListInformation, &operation_number, sizeof(operation_number));
   return NT_SUCCESS(status);
 }
 
@@ -158,6 +167,9 @@ void TestRwe() {
   ExFreePoolWithTag(stuff, kHyperPlatformCommonPoolTag);
 }
 
+// The function 'TestpRwe1' has PAGED_CODE or PAGED_CODE_LOCKED but is not
+// declared to be in a paged segment.
+#pragma prefast(suppress : 28172)
 static void TestpRwe1(UCHAR* ptr) {
   PAGED_CODE();
 
