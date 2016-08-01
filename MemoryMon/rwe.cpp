@@ -6,6 +6,7 @@
 /// Implements RWE functions.
 
 #include "rwe.h"
+#include "scoped_lock.h"
 #define NTSTRSAFE_NO_CB_FUNCTIONS
 #include <ntstrsafe.h>
 #include "../HyperPlatform/HyperPlatform/common.h"
@@ -53,20 +54,6 @@ struct RweLastData {
       : is_write(false), guest_ip(0), fault_va(0), ept_entry(nullptr) {}
 };
 
-class ScopeSpinLock {
- public:
-  explicit ScopeSpinLock(KSPIN_LOCK* spin_lock) : spin_lock_(spin_lock_) {
-    KeAcquireInStackQueuedSpinLockAtDpcLevel(spin_lock, &lock_handle_);
-  }
-  ~ScopeSpinLock() {
-    KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle_);
-  }
-
- private:
-  KSPIN_LOCK* spin_lock_;
-  KLOCK_QUEUE_HANDLE lock_handle_;
-};
-
 struct V2PMap {
   void* va;
   ULONG64 pa;
@@ -77,12 +64,12 @@ class AddressRanges {
   AddressRanges() { KeInitializeSpinLock(&ranges_spinlock_); }
 
   void add(const AddressRange& range) {
-    //ScopeSpinLock lock(&ranges_spinlock_);
+    // ScopedLock lock(&ranges_spinlock_);
     ranges_.push_back(range);
   }
 
   bool is_in_range(ULONG_PTR address) const {
-    //ScopeSpinLock lock(&ranges_spinlock_);
+    // ScopedLock lock(&ranges_spinlock_);
 
     bool inside = false;
     for (const auto& range : ranges_) {
@@ -97,7 +84,7 @@ class AddressRanges {
   using ForEachCallback = bool (*)(ULONG_PTR va, ULONG64 pa, void* context);
 
   void for_each_page(ForEachCallback callback, void* context) {
-    //ScopeSpinLock lock(&ranges_spinlock_);
+    // ScopedLock lock(&ranges_spinlock_);
 
     for (const auto& ragne : ranges_) {
       const auto num_of_pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
@@ -122,7 +109,7 @@ class V2PMap2 {
   V2PMap2() { KeInitializeSpinLock(&v2p_map_spinlock_); }
 
   void add(const AddressRange& range) {
-    //ScopeSpinLock lock(&v2p_map_spinlock_);
+    // ScopedLock lock(&v2p_map_spinlock_);
 
     const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
         range.start_address, range.end_address - range.start_address + 1);
@@ -137,7 +124,7 @@ class V2PMap2 {
   }
 
   bool refresh(ProcessorData* processor_data) {
-    //ScopeSpinLock lock(&v2p_map_spinlock_);
+    // ScopedLock lock(&v2p_map_spinlock_);
 
     bool need_refresh = false;
     for (auto& map : v2p_map_) {
@@ -554,6 +541,7 @@ void RweVmcallApplyRanges(ProcessorData* processor_data) {
   UtilInveptAll();
 }
 
+// FIXME: have to update EPT entries for all processors as needed
 void RweHandleTlbFlush(ProcessorData* processor_data) {
   if (g_rwep_shared_data.v2p_map.refresh(processor_data)) {
     RweVmcallApplyRanges(processor_data);

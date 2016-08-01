@@ -69,6 +69,9 @@
     <ClCompile Include="pagefault.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="scoped_lock.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="memorymon.h">
@@ -129,6 +132,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="pagefault.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="scoped_lock.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

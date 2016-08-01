@@ -3,12 +3,13 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to page-fault functions.
+/// Declares interfaces to the ScopedLock class.
 
-#ifndef MEMORYMON_PAGEFAULT_H_
-#define MEMORYMON_PAGEFAULT_H_
+#ifndef MEMORYMON_SCOPED_LOCK_H_
+#define MEMORYMON_SCOPED_LOCK_H_
 
-extern "C" {
+#include <fltKernel.h>
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // macro utilities
@@ -24,14 +25,20 @@ extern "C" {
 // types
 //
 
+class ScopedLock {
+ public:
+  explicit ScopedLock(KSPIN_LOCK* spin_lock);
+  ~ScopedLock();
+
+ private:
+  KSPIN_LOCK* spin_lock_;
+  KLOCK_QUEUE_HANDLE lock_handle_;
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
-
-bool PageFaultHanlePageFault(void* guest_ip);
-
-bool PageFaultHandleBreakpoint(void* guest_ip);
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -43,6 +50,4 @@ bool PageFaultHandleBreakpoint(void* guest_ip);
 // implementations
 //
 
-}  // extern "C"
-
-#endif  // MEMORYMON_PAGEFAULT_H_
+#endif  // MEMORYMON_SCOPED_LOCK_H_

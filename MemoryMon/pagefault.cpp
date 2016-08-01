@@ -6,11 +6,55 @@
 /// Implements page-fault functions.
 
 #include "pagefault.h"
+#include "scoped_lock.h"
 #include "../HyperPlatform/HyperPlatform/common.h"
 #include "../HyperPlatform/HyperPlatform/log.h"
 #include "../HyperPlatform/HyperPlatform/util.h"
+#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
+#include <vector>
+#include <algorithm>
 
 #pragma section(".asm", read, execute)
+
+struct FaultMap {
+  PETHREAD thread;
+  void* guest_ip;
+};
+
+class MyMap {
+ public:
+  MyMap() { KeInitializeSpinLock(&spin_lock_); }
+
+  void push(PETHREAD thread, void* guest_ip) {
+    ScopedLock lock(&spin_lock_);
+    pfp_map_.push_back(FaultMap{thread, guest_ip});
+  }
+
+  bool has(PETHREAD thread) const {
+    ScopedLock lock(&spin_lock_);
+    const auto position = std::find_if(
+        pfp_map_.begin(), pfp_map_.end(),
+        [thread](const auto& elem) { return elem.thread == thread; });
+    return (position != pfp_map_.end());
+  }
+
+  void* pop(PETHREAD thread) {
+    ScopedLock lock(&spin_lock_);
+    const auto position = std::find_if(
+        pfp_map_.begin(), pfp_map_.end(),
+        [thread](const auto& elem) { return elem.thread == thread; });
+    if (position == pfp_map_.end()) {
+      return nullptr;
+    }
+    const auto guest_ip = position->guest_ip;
+    pfp_map_.erase(position);
+    return guest_ip;
+  }
+
+ private:
+  std::vector<FaultMap> pfp_map_;
+  mutable KSPIN_LOCK spin_lock_;
+} g_pfp_map;
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -31,21 +75,10 @@ __declspec(allocate(".asm")) static const UCHAR kPageFaultpBreakPoint[] = {
 // types
 //
 
-struct PageFaultData {
-  void* last_ip;
-
-  PageFaultData() : last_ip(nullptr) {}
-};
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
-
-#if defined(ALLOC_PRAGMA)
-#pragma alloc_text(INIT, PageFaultAllocData)
-#pragma alloc_text(PAGE, PageFaultFreeData)
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -57,43 +90,28 @@ struct PageFaultData {
 // implementations
 //
 
-PageFaultData* PageFaultAllocData() {
-  PAGED_CODE();
-  return new PageFaultData;
-}
-
-void PageFaultFreeData(PageFaultData* page_fault_data) {
-  PAGED_CODE();
-  delete page_fault_data;
-}
-
-bool PageFaultHanlePageFault(PageFaultData* page_fault_data, void* guest_ip) {
+bool PageFaultHanlePageFault(void* guest_ip) {
   if (guest_ip < MmSystemRangeStart) {
     return false;
   }
-  if (page_fault_data->last_ip) {
+  if (g_pfp_map.has(PsGetCurrentThread())) {
     return false;
   }
 
-  HYPERPLATFORM_LOG_DEBUG_SAFE("#PF %p", guest_ip);
   UtilVmWrite(VmcsField::kGuestRip,
               reinterpret_cast<ULONG_PTR>(&kPageFaultpBreakPoint));
-  NT_ASSERT(!page_fault_data->last_ip);
-  page_fault_data->last_ip = guest_ip;
+  g_pfp_map.push(PsGetCurrentThread(), guest_ip);
   return true;
 }
 
-bool PageFaultHandleBreakpoint(PageFaultData* page_fault_data, void* guest_ip) {
+bool PageFaultHandleBreakpoint(void* guest_ip) {
   if (guest_ip != kPageFaultpBreakPoint) {
     return false;
   }
 
-  HYPERPLATFORM_LOG_DEBUG_SAFE("#BP %p", page_fault_data->last_ip);
-  NT_ASSERT(page_fault_data->last_ip);
-
-  UtilVmWrite(VmcsField::kGuestRip,
-              reinterpret_cast<ULONG_PTR>(page_fault_data->last_ip));
-  page_fault_data->last_ip = nullptr;
+  const auto last_ip = g_pfp_map.pop(PsGetCurrentThread());
+  NT_ASSERT(last_ip);
+  UtilVmWrite(VmcsField::kGuestRip, reinterpret_cast<ULONG_PTR>(last_ip));
   return true;
 }
 

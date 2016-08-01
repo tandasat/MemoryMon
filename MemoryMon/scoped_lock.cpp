@@ -3,12 +3,10 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to page-fault functions.
+/// Implements the ScopedLock class.
 
-#ifndef MEMORYMON_PAGEFAULT_H_
-#define MEMORYMON_PAGEFAULT_H_
+#include "scoped_lock.h"
 
-extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
 //
 // macro utilities
@@ -29,10 +27,6 @@ extern "C" {
 // prototypes
 //
 
-bool PageFaultHanlePageFault(void* guest_ip);
-
-bool PageFaultHandleBreakpoint(void* guest_ip);
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 // variables
@@ -43,6 +37,10 @@ bool PageFaultHandleBreakpoint(void* guest_ip);
 // implementations
 //
 
-}  // extern "C"
+ScopedLock::ScopedLock(KSPIN_LOCK* spin_lock) : spin_lock_(spin_lock_) {
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(spin_lock, &lock_handle_);
+}
 
-#endif  // MEMORYMON_PAGEFAULT_H_
+ScopedLock::~ScopedLock() {
+  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle_);
+}
