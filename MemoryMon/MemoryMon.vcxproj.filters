@@ -66,10 +66,16 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\global_object.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="pagefault.cpp">
+    <ClCompile Include="scoped_lock.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="scoped_lock.cpp">
+    <ClCompile Include="test_util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="page_fault.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="page_fault_record.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -131,10 +137,16 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\global_object.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="pagefault.h">
+    <ClInclude Include="scoped_lock.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="scoped_lock.h">
+    <ClInclude Include="test_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="page_fault_record.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="page_fault.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

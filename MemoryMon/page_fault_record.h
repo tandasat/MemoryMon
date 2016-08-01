@@ -3,12 +3,15 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to page-fault functions.
+/// Declares interfaces to the PageFaultRecord class.
 
-#ifndef MEMORYMON_PAGEFAULT_H_
-#define MEMORYMON_PAGEFAULT_H_
+#ifndef MEMORYMON_PAGE_FAULT_RECORD_H_
+#define MEMORYMON_PAGE_FAULT_RECORD_H_
 
-extern "C" {
+#include <fltKernel.h>
+#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
+#include <vector>
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // macro utilities
@@ -24,14 +27,28 @@ extern "C" {
 // types
 //
 
+class PageFaultRecord {
+ public:
+  PageFaultRecord();
+
+  void push(_In_ PETHREAD thread, _In_ void* guest_ip);
+  bool has(_In_ PETHREAD thread) const;
+  void* pop(_In_ PETHREAD thread);
+
+ private:
+  struct PageFaultRecordEntry {
+    PETHREAD thread;
+    void* guest_ip;
+  };
+
+  std::vector<PageFaultRecordEntry> record_;
+  mutable KSPIN_LOCK record_spinlock_;
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
-
-bool PageFaultHanlePageFault(void* guest_ip);
-
-bool PageFaultHandleBreakpoint(void* guest_ip);
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -43,6 +60,4 @@ bool PageFaultHandleBreakpoint(void* guest_ip);
 // implementations
 //
 
-}  // extern "C"
-
-#endif  // MEMORYMON_PAGEFAULT_H_
+#endif  // MEMORYMON_PAGE_FAULT_RECORD_H_

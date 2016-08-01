@@ -39,24 +39,19 @@ static const auto kRwepWriteMonitorSize = 16;
 //
 
 struct AddressRange {
-  ULONG_PTR start_address;  // inclusive
-  ULONG_PTR end_address;    // inclusive
+  void* start_address;  // inclusive
+  void* end_address;    // inclusive
 };
 
 struct RweLastData {
   bool is_write;
-  ULONG_PTR guest_ip;
-  ULONG_PTR fault_va;
+  void* guest_ip;
+  void* fault_va;
   EptCommonEntry* ept_entry;
   std::array<UCHAR, kRwepWriteMonitorSize> old_bytes;
 
   RweLastData()
       : is_write(false), guest_ip(0), fault_va(0), ept_entry(nullptr) {}
-};
-
-struct V2PMap {
-  void* va;
-  ULONG64 pa;
 };
 
 class AddressRanges {
@@ -68,7 +63,7 @@ class AddressRanges {
     ranges_.push_back(range);
   }
 
-  bool is_in_range(ULONG_PTR address) const {
+  bool is_in_range(void* address) const {
     // ScopedLock lock(&ranges_spinlock_);
 
     bool inside = false;
@@ -81,17 +76,21 @@ class AddressRanges {
     return inside;
   }
 
-  using ForEachCallback = bool (*)(ULONG_PTR va, ULONG64 pa, void* context);
+  using ForEachCallback = bool (*)(void* va, ULONG64 pa, void* context);
 
   void for_each_page(ForEachCallback callback, void* context) {
     // ScopedLock lock(&ranges_spinlock_);
 
-    for (const auto& ragne : ranges_) {
+    for (const auto& range : ranges_) {
+      const auto start_address =
+          reinterpret_cast<ULONG_PTR>(range.start_address);
+      const auto end_address = reinterpret_cast<ULONG_PTR>(range.end_address);
       const auto num_of_pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-          ragne.start_address, ragne.end_address - ragne.start_address + 1);
+          start_address, end_address - start_address + 1);
       for (auto page_index = 0ul; page_index < num_of_pages; ++page_index) {
-        const auto va = ragne.start_address + PAGE_SIZE * page_index;
-        const auto pa = UtilPaFromVa(reinterpret_cast<void*>(va));
+        const auto va =
+            reinterpret_cast<void*>(start_address + PAGE_SIZE * page_index);
+        const auto pa = UtilPaFromVa(va);
         if (!callback(va, pa, context)) {
           break;
         }
@@ -110,14 +109,15 @@ class V2PMap2 {
 
   void add(const AddressRange& range) {
     // ScopedLock lock(&v2p_map_spinlock_);
+    const auto start_address = reinterpret_cast<ULONG_PTR>(range.start_address);
+    const auto end_address = reinterpret_cast<ULONG_PTR>(range.end_address);
 
     const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-        range.start_address, range.end_address - range.start_address + 1);
+        start_address, end_address - start_address + 1);
     for (auto page_index = 0ul; page_index < pages; ++page_index) {
-      const auto va_base =
-          PAGE_ALIGN(range.start_address + PAGE_SIZE * page_index);
+      const auto va_base = PAGE_ALIGN(start_address + PAGE_SIZE * page_index);
       const auto pa_base = UtilPaFromVa(va_base);
-      v2p_map_.push_back(V2PMap{va_base, pa_base});
+      v2p_map_.push_back(V2PMapEntry{va_base, pa_base});
 
       HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", va_base, pa_base);
     }
@@ -162,7 +162,12 @@ class V2PMap2 {
   }
 
  private:
-  std::vector<V2PMap> v2p_map_;
+  struct V2PMapEntry {
+    void* va;
+    ULONG64 pa;
+  };
+
+  std::vector<V2PMapEntry> v2p_map_;
   mutable KSPIN_LOCK v2p_map_spinlock_;
 };
 
@@ -200,42 +205,47 @@ static RweSharedData g_rwep_shared_data;
 // implementations
 //
 
-RweData* RweAllocData() {
+_Use_decl_annotations_ RweData* RweAllocData() {
   PAGED_CODE();
   return new RweData;
 }
 
-void RweFreeData(RweData* rwe_data) {
+_Use_decl_annotations_ void RweFreeData(RweData* rwe_data) {
   PAGED_CODE();
   delete rwe_data;
 }
 
-void RweAddSrcRange(ULONG_PTR address, SIZE_T size) {
-  AddressRange range = {address, address + size - 1};
+_Use_decl_annotations_ void RweAddSrcRange(void* address, SIZE_T size) {
+  AddressRange range = {
+      address,
+      reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1)};
   HYPERPLATFORM_LOG_DEBUG_SAFE("Add SRC range: %p - %p", range.start_address,
                                range.end_address);
   g_rwep_shared_data.src_ranges.add(range);
   g_rwep_shared_data.v2p_map.add(range);
 }
 
-void RweAddDstRange(ULONG_PTR address, SIZE_T size) {
-  AddressRange range = {address, address + size - 1};
+_Use_decl_annotations_ void RweAddDstRange(void* address, SIZE_T size) {
+  AddressRange range = {
+      address,
+      reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1)};
   HYPERPLATFORM_LOG_DEBUG_SAFE("Add DST range: %p - %p", range.start_address,
                                range.end_address);
   g_rwep_shared_data.dst_ranges.add(range);
   g_rwep_shared_data.v2p_map.add(range);
 }
 
-bool RweIsInsideSrcRange(ULONG_PTR address) {
+_Use_decl_annotations_ bool RweIsInsideSrcRange(void* address) {
   return g_rwep_shared_data.src_ranges.is_in_range(address);
 }
 
-bool RweIsInsideDstRange(ULONG_PTR address) {
+_Use_decl_annotations_ bool RweIsInsideDstRange(void* address) {
   return g_rwep_shared_data.dst_ranges.is_in_range(address);
 }
 
 // Make all non-executable for MONITOR
-void RweSetDefaultEptAttributes(ProcessorData* processor_data) {
+_Use_decl_annotations_ void RweSetDefaultEptAttributes(
+    ProcessorData* processor_data) {
   PAGED_CODE();
 
   const auto pm_ranges = UtilGetPhysicalMemoryRanges();
@@ -254,7 +264,7 @@ void RweSetDefaultEptAttributes(ProcessorData* processor_data) {
 }
 
 // Apply ranges to EPT attributes
-void RweApplyRanges() {
+_Use_decl_annotations_ void RweApplyRanges() {
   PAGED_CODE();
 
   UtilForEachProcessor(
@@ -265,10 +275,50 @@ void RweApplyRanges() {
       nullptr);
 }
 
+_Use_decl_annotations_ static void RwepApplyRangesDpcRoutine(
+  _KDPC* Dpc,  PVOID DeferredContext,
+     PVOID SystemArgument1,  PVOID SystemArgument2) {
+  UNREFERENCED_PARAMETER(DeferredContext);
+  UNREFERENCED_PARAMETER(SystemArgument1);
+  UNREFERENCED_PARAMETER(SystemArgument2);
+
+  UtilVmCall(HypercallNumber::kRweApplyRanges, nullptr);
+  ExFreePoolWithTag(Dpc, kHyperPlatformCommonPoolTag);
+}
+
+_Use_decl_annotations_ static NTSTATUS RwepApplyRangesDpc() {
+  const auto number_of_processors =
+      KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+  for (ULONG processor_index = 0; processor_index < number_of_processors;
+       processor_index++) {
+    PROCESSOR_NUMBER processor_number = {};
+    auto status =
+        KeGetProcessorNumberFromIndex(processor_index, &processor_number);
+    if (!NT_SUCCESS(status)) {
+      return status;
+    }
+
+    const auto dpc = reinterpret_cast<PRKDPC>(ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(KDPC), kHyperPlatformCommonPoolTag));
+    if (!dpc) {
+      return STATUS_MEMORY_NOT_ALLOCATED;
+    }
+    KeInitializeDpc(dpc, RwepApplyRangesDpcRoutine, nullptr);
+    status = KeSetTargetProcessorDpcEx(dpc, &processor_number);
+    if (!NT_SUCCESS(status)) {
+      ExFreePoolWithTag(dpc, kHyperPlatformCommonPoolTag);
+      return status;
+    }
+    KeInsertQueueDpc(dpc, nullptr, nullptr);
+  }
+  return STATUS_SUCCESS;
+}
+
 //
 // VMM code
 //
-static void RweSwtichToNormalMode(_Inout_ ProcessorData* processor_data) {
+_Use_decl_annotations_ static void RweSwtichToNormalMode(
+    _Inout_ ProcessorData* processor_data) {
   processor_data->ept_data = processor_data->ept_data_normal;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
@@ -276,7 +326,8 @@ static void RweSwtichToNormalMode(_Inout_ ProcessorData* processor_data) {
   UtilInveptAll();
 }
 
-static void RwepSwitchToMonitoringMode(_Inout_ ProcessorData* processor_data) {
+_Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
+    _Inout_ ProcessorData* processor_data) {
   processor_data->ept_data = processor_data->ept_data_monitor;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
@@ -284,8 +335,8 @@ static void RwepSwitchToMonitoringMode(_Inout_ ProcessorData* processor_data) {
   UtilInveptAll();
 }
 
-static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
-                                       ULONG_PTR fault_va) {
+_Use_decl_annotations_ static void RwepHandleExecuteViolation(
+    _Inout_ ProcessorData* processor_data, void* fault_va) {
   if (RweIsInsideSrcRange(fault_va)) {
     // Someone is entering a source range
 
@@ -326,7 +377,7 @@ static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
     RweSwtichToNormalMode(processor_data);
 
     const auto guest_sp =
-        reinterpret_cast<ULONG_PTR*>(UtilVmRead(VmcsField::kGuestRsp));
+        reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
     const auto return_address = *guest_sp;
 
     // Log only when a return address is inside a source range. By this, we
@@ -341,23 +392,22 @@ static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
   }
 }
 
-static void RewpSetMonitorTrapFlag(bool enable) {
+_Use_decl_annotations_ static void RewpSetMonitorTrapFlag(bool enable) {
   VmxProcessorBasedControls vm_procctl = {
       static_cast<unsigned int>(UtilVmRead(VmcsField::kCpuBasedVmExecControl))};
   vm_procctl.fields.monitor_trap_flag = enable;
   UtilVmWrite(VmcsField::kCpuBasedVmExecControl, vm_procctl.all);
 }
 
-static void RewpSetReadWriteOnPage(bool allow_read_write,
-                                   EptCommonEntry* ept_entry) {
+_Use_decl_annotations_ static void RewpSetReadWriteOnPage(
+    bool allow_read_write, EptCommonEntry* ept_entry) {
   ept_entry->fields.write_access = allow_read_write;
   ept_entry->fields.read_access = allow_read_write;
   UtilInveptAll();
 }
 
-static void* RwepContextCopyMemory(_Out_ void* destination,
-                                   _In_ void const* source,
-                                   _In_ SIZE_T length) {
+_Use_decl_annotations_ static void* RwepContextCopyMemory(
+    _Out_ void* destination, _In_ void const* source, _In_ SIZE_T length) {
   const auto current_cr3 = __readcr3();
   const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
   __writecr3(guest_cr3);
@@ -366,9 +416,9 @@ static void* RwepContextCopyMemory(_Out_ void* destination,
   return result;
 }
 
-static void RewpHandleReadWriteViolation(ProcessorData* processor_data,
-                                         ULONG_PTR guest_ip, ULONG_PTR fault_va,
-                                         bool is_write) {
+_Use_decl_annotations_ static void RewpHandleReadWriteViolation(
+    ProcessorData* processor_data, void* guest_ip, void* fault_va,
+    bool is_write) {
   NT_ASSERT(!processor_data->rwe_data->last_data.ept_entry);
 
   // Read or write from a source range to a dest range
@@ -409,9 +459,9 @@ static void RewpHandleReadWriteViolation(ProcessorData* processor_data,
   }
 }
 
-void RweHandleEptViolation(ProcessorData* processor_data, ULONG_PTR guest_ip,
-                           ULONG_PTR fault_va, bool read_violation,
-                           bool write_violation, bool execute_violation) {
+_Use_decl_annotations_ void RweHandleEptViolation(
+    ProcessorData* processor_data, void* guest_ip, void* fault_va,
+    bool read_violation, bool write_violation, bool execute_violation) {
   // HYPERPLATFORM_COMMON_DBG_BREAK();
 
   if (execute_violation) {
@@ -425,8 +475,10 @@ void RweHandleEptViolation(ProcessorData* processor_data, ULONG_PTR guest_ip,
   }
 }
 
-static NTSTATUS RwepBytesToString(char* buffer, SIZE_T buffer_size,
-                                  const UCHAR* bytes, SIZE_T bytes_size) {
+_Use_decl_annotations_ static NTSTATUS RwepBytesToString(char* buffer,
+                                                         SIZE_T buffer_size,
+                                                         const UCHAR* bytes,
+                                                         SIZE_T bytes_size) {
   for (auto i = 0ul; i < bytes_size; ++i) {
     const auto consumed_bytes = i * 3;
     const auto remaining_size = buffer_size - consumed_bytes;
@@ -441,7 +493,8 @@ static NTSTATUS RwepBytesToString(char* buffer, SIZE_T buffer_size,
   return STATUS_SUCCESS;
 }
 
-void RweHandleMonitorTrapFlag(ProcessorData* processor_data) {
+_Use_decl_annotations_ void RweHandleMonitorTrapFlag(
+    ProcessorData* processor_data) {
   NT_ASSERT(processor_data->rwe_data->last_data.ept_entry);
 
   // Revert to
@@ -492,7 +545,8 @@ void RweHandleMonitorTrapFlag(ProcessorData* processor_data) {
 
 // Make source ranges non-executable for normal pages and executable for
 // monitor pages
-static bool RwepSrcPageCallback(ULONG_PTR va, ULONG64 pa, void* context) {
+_Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
+                                                       void* context) {
   if (!pa) {
     HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
@@ -514,7 +568,8 @@ static bool RwepSrcPageCallback(ULONG_PTR va, ULONG64 pa, void* context) {
 }
 
 // Make dest ranges non-readable/writable/executable for monitor pages
-static bool RwepDstPageCallback(ULONG_PTR va, ULONG64 pa, void* context) {
+_Use_decl_annotations_ static bool RwepDstPageCallback(void* va, ULONG64 pa,
+                                                       void* context) {
   if (!pa) {
     HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
@@ -530,7 +585,8 @@ static bool RwepDstPageCallback(ULONG_PTR va, ULONG64 pa, void* context) {
 }
 
 // Apply ranges to EPT attributes
-void RweVmcallApplyRanges(ProcessorData* processor_data) {
+_Use_decl_annotations_ void RweVmcallApplyRanges(
+    ProcessorData* processor_data) {
   NT_ASSERT(processor_data->ept_data == processor_data->ept_data_normal);
 
   g_rwep_shared_data.src_ranges.for_each_page(RwepSrcPageCallback,
@@ -541,10 +597,9 @@ void RweVmcallApplyRanges(ProcessorData* processor_data) {
   UtilInveptAll();
 }
 
-// FIXME: have to update EPT entries for all processors as needed
-void RweHandleTlbFlush(ProcessorData* processor_data) {
+_Use_decl_annotations_ void RweHandleTlbFlush(ProcessorData* processor_data) {
   if (g_rwep_shared_data.v2p_map.refresh(processor_data)) {
-    RweVmcallApplyRanges(processor_data);
+    RwepApplyRangesDpc();
   }
 }
 

@@ -36,25 +36,27 @@ struct RweData;
 //
 
 _IRQL_requires_max_(PASSIVE_LEVEL) RweData* RweAllocData();
-_IRQL_requires_max_(PASSIVE_LEVEL) void RweFreeData(RweData* rwe_data);
+_IRQL_requires_max_(PASSIVE_LEVEL) void RweFreeData(_In_ RweData* rwe_data);
 
-void RweAddSrcRange(ULONG_PTR address, SIZE_T size);
-void RweAddDstRange(ULONG_PTR address, SIZE_T size);
-bool RweIsInsideSrcRange(ULONG_PTR address);
-bool RweIsInsideDstRange(ULONG_PTR address);
+void RweAddSrcRange(_In_ void* address, _In_ SIZE_T size);
+void RweAddDstRange(_In_ void* address, _In_ SIZE_T size);
+bool RweIsInsideSrcRange(_In_ void* address);
+bool RweIsInsideDstRange(_In_ void* address);
 
-_IRQL_requires_max_(PASSIVE_LEVEL) void RweSetDefaultEptAttributes(ProcessorData* processor_data);
+_IRQL_requires_max_(PASSIVE_LEVEL) void RweSetDefaultEptAttributes(
+    _Inout_ ProcessorData* processor_data);
 _IRQL_requires_max_(PASSIVE_LEVEL) void RweApplyRanges();
 
-void RweHandleEptViolation(ProcessorData* processor_data, ULONG_PTR guest_ip,
-                           ULONG_PTR fault_va, bool read_violation,
-                           bool write_violation, bool execute_violation);
+void RweHandleEptViolation(_Inout_ ProcessorData* processor_data,
+                           _In_ void* guest_ip, _In_ void* fault_va,
+                           _In_ bool read_violation, _In_ bool write_violation,
+                           _In_ bool execute_violation);
 
-void RweHandleMonitorTrapFlag(ProcessorData* processor_data);
+void RweHandleMonitorTrapFlag(_Inout_ ProcessorData* processor_data);
 
-void RweVmcallApplyRanges(ProcessorData* processor_data);
+void RweVmcallApplyRanges(_Inout_ ProcessorData* processor_data);
 
-void RweHandleTlbFlush(ProcessorData* processor_data);
+void RweHandleTlbFlush(_Inout_ ProcessorData* processor_data);
 
 ////////////////////////////////////////////////////////////////////////////////
 //

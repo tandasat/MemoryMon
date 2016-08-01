@@ -3,13 +3,14 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to the ScopedLock class.
+/// Declares interfaces to test utility functions.
 
-#ifndef MEMORYMON_SCOPED_LOCK_H_
-#define MEMORYMON_SCOPED_LOCK_H_
+#ifndef MEMORYMON_TEST_UTIL_H_
+#define MEMORYMON_TEST_UTIL_H_
 
 #include <fltKernel.h>
 
+extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
 //
 // macro utilities
@@ -25,20 +26,12 @@
 // types
 //
 
-class ScopedLock {
- public:
-  explicit ScopedLock(_In_ KSPIN_LOCK* spinlock);
-  ~ScopedLock();
-
- private:
-  KSPIN_LOCK* spinlock_;
-  KLOCK_QUEUE_HANDLE lock_handle_;
-};
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
+
+_IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS TestUtilPageOut();
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -50,4 +43,6 @@ class ScopedLock {
 // implementations
 //
 
-#endif  // MEMORYMON_SCOPED_LOCK_H_
+}  // extern "C"
+
+#endif  // MEMORYMON_TEST_UTIL_H_

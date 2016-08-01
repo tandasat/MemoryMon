@@ -37,10 +37,11 @@
 // implementations
 //
 
-ScopedLock::ScopedLock(KSPIN_LOCK* spin_lock) : spin_lock_(spin_lock) {
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(spin_lock, &lock_handle_);
+_Use_decl_annotations_ ScopedLock::ScopedLock(KSPIN_LOCK* spinlock_)
+    : spinlock_(spinlock_) {
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(spinlock_, &lock_handle_);
 }
 
-ScopedLock::~ScopedLock() {
+_Use_decl_annotations_ ScopedLock::~ScopedLock() {
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle_);
 }

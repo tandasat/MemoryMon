@@ -131,10 +131,12 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\vmm.cpp" />
     <ClCompile Include="memorymon.cpp" />
     <ClCompile Include="memorymon_ept.cpp" />
-    <ClCompile Include="pagefault.cpp" />
+    <ClCompile Include="page_fault.cpp" />
+    <ClCompile Include="page_fault_record.cpp" />
     <ClCompile Include="rwe.cpp" />
     <ClCompile Include="scoped_lock.cpp" />
     <ClCompile Include="test.cpp" />
+    <ClCompile Include="test_util.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\asm.h" />
@@ -154,10 +156,12 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vmm.h" />
     <ClInclude Include="memorymon.h" />
     <ClInclude Include="memorymon_ept.h" />
-    <ClInclude Include="pagefault.h" />
+    <ClInclude Include="page_fault.h" />
+    <ClInclude Include="page_fault_record.h" />
     <ClInclude Include="rwe.h" />
     <ClInclude Include="scoped_lock.h" />
     <ClInclude Include="test.h" />
+    <ClInclude Include="test_util.h" />
   </ItemGroup>
   <ItemGroup>
     <MASM Include="..\HyperPlatform\HyperPlatform\Arch\x64\x64.asm">
