@@ -28,33 +28,33 @@ extern "C" {
 
 struct ProcessorData;
 
+struct RweData;
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
 
-NTSTATUS RweInitialization();
-void RweTermination();
+_IRQL_requires_max_(PASSIVE_LEVEL) RweData* RweAllocData();
+_IRQL_requires_max_(PASSIVE_LEVEL) void RweFreeData(RweData* rwe_data);
 
 void RweAddSrcRange(ULONG_PTR address, SIZE_T size);
 void RweAddDstRange(ULONG_PTR address, SIZE_T size);
 bool RweIsInsideSrcRange(ULONG_PTR address);
 bool RweIsInsideDstRange(ULONG_PTR address);
 
-void RweSetDefaultEptAttributes(ProcessorData* processor_data);
-void RweApplyRanges();
+_IRQL_requires_max_(PASSIVE_LEVEL) void RweSetDefaultEptAttributes(ProcessorData* processor_data);
+_IRQL_requires_max_(PASSIVE_LEVEL) void RweApplyRanges();
 
 void RweHandleEptViolation(ProcessorData* processor_data, ULONG_PTR guest_ip,
                            ULONG_PTR fault_va, bool read_violation,
                            bool write_violation, bool execute_violation);
-void RweHandleMonitorTrapFlag();
+
+void RweHandleMonitorTrapFlag(ProcessorData* processor_data);
 
 void RweVmcallApplyRanges(ProcessorData* processor_data);
 
 void RweHandleTlbFlush(ProcessorData* processor_data);
-
-void PageFaultpHanlePageFault(void* guest_ip, ULONG_PTR fault_address);
-bool PageFaultpHandleBreakpoint(void* guest_ip, ProcessorData* processor_data);
 
 ////////////////////////////////////////////////////////////////////////////////
 //

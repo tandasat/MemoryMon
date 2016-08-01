@@ -28,8 +28,8 @@ extern "C" {
 // constants and macros
 //
 
-// memmove uses xmmN which is 128 bits
-// zmmN registers on AVX-512 are 512 bits
+// xmmN is 128 bits (memmove etc)
+// zmmN is 512 bits (AVX-512)
 static const auto kRwepWriteMonitorSize = 16;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -42,139 +42,215 @@ struct AddressRange {
   ULONG_PTR end_address;    // inclusive
 };
 
-struct rwe_last_info {
+struct RweLastData {
+  bool is_write;
   ULONG_PTR guest_ip;
   ULONG_PTR fault_va;
   EptCommonEntry* ept_entry;
   std::array<UCHAR, kRwepWriteMonitorSize> old_bytes;
+
+  RweLastData()
+      : is_write(false), guest_ip(0), fault_va(0), ept_entry(nullptr) {}
 };
 
-struct VitualAndPhysicalMap {
+class ScopeSpinLock {
+ public:
+  explicit ScopeSpinLock(KSPIN_LOCK* spin_lock) : spin_lock_(spin_lock_) {
+    KeAcquireInStackQueuedSpinLockAtDpcLevel(spin_lock, &lock_handle_);
+  }
+  ~ScopeSpinLock() {
+    KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle_);
+  }
+
+ private:
+  KSPIN_LOCK* spin_lock_;
+  KLOCK_QUEUE_HANDLE lock_handle_;
+};
+
+struct V2PMap {
   void* va;
   ULONG64 pa;
 };
+
+class AddressRanges {
+ public:
+  AddressRanges() { KeInitializeSpinLock(&ranges_spinlock_); }
+
+  void add(const AddressRange& range) {
+    //ScopeSpinLock lock(&ranges_spinlock_);
+    ranges_.push_back(range);
+  }
+
+  bool is_in_range(ULONG_PTR address) const {
+    //ScopeSpinLock lock(&ranges_spinlock_);
+
+    bool inside = false;
+    for (const auto& range : ranges_) {
+      if (UtilIsInBounds(address, range.start_address, range.end_address)) {
+        inside = true;
+        break;
+      }
+    }
+    return inside;
+  }
+
+  using ForEachCallback = bool (*)(ULONG_PTR va, ULONG64 pa, void* context);
+
+  void for_each_page(ForEachCallback callback, void* context) {
+    //ScopeSpinLock lock(&ranges_spinlock_);
+
+    for (const auto& ragne : ranges_) {
+      const auto num_of_pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+          ragne.start_address, ragne.end_address - ragne.start_address + 1);
+      for (auto page_index = 0ul; page_index < num_of_pages; ++page_index) {
+        const auto va = ragne.start_address + PAGE_SIZE * page_index;
+        const auto pa = UtilPaFromVa(reinterpret_cast<void*>(va));
+        if (!callback(va, pa, context)) {
+          break;
+        }
+      }
+    }
+  }
+
+ private:
+  std::vector<AddressRange> ranges_;
+  mutable KSPIN_LOCK ranges_spinlock_;
+};
+
+class V2PMap2 {
+ public:
+  V2PMap2() { KeInitializeSpinLock(&v2p_map_spinlock_); }
+
+  void add(const AddressRange& range) {
+    //ScopeSpinLock lock(&v2p_map_spinlock_);
+
+    const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+        range.start_address, range.end_address - range.start_address + 1);
+    for (auto page_index = 0ul; page_index < pages; ++page_index) {
+      const auto va_base =
+          PAGE_ALIGN(range.start_address + PAGE_SIZE * page_index);
+      const auto pa_base = UtilPaFromVa(va_base);
+      v2p_map_.push_back(V2PMap{va_base, pa_base});
+
+      HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", va_base, pa_base);
+    }
+  }
+
+  bool refresh(ProcessorData* processor_data) {
+    //ScopeSpinLock lock(&v2p_map_spinlock_);
+
+    bool need_refresh = false;
+    for (auto& map : v2p_map_) {
+      NT_ASSERT(map.va == PAGE_ALIGN(map.va));
+      NT_ASSERT(map.pa == reinterpret_cast<ULONG64>(PAGE_ALIGN(map.pa)));
+      const auto new_pa = UtilPaFromVa(map.va);
+      if (new_pa == map.pa) {
+        continue;
+      }
+
+      if (map.pa) {
+        const auto old_ept_entry_n =
+            EptGetEptPtEntry(processor_data->ept_data_normal, map.pa);
+        const auto old_ept_entry_m =
+            EptGetEptPtEntry(processor_data->ept_data_monitor, map.pa);
+        NT_ASSERT(old_ept_entry_n && old_ept_entry_n->all);
+        NT_ASSERT(old_ept_entry_m && old_ept_entry_m->all);
+
+        old_ept_entry_n->fields.execute_access = true;
+        old_ept_entry_n->fields.read_access = true;
+        old_ept_entry_n->fields.write_access = true;
+
+        // monitor pages are not executable by default
+        old_ept_entry_m->fields.execute_access = false;
+        old_ept_entry_m->fields.read_access = true;
+        old_ept_entry_m->fields.write_access = true;
+      }
+
+      HYPERPLATFORM_LOG_DEBUG_SAFE("Map: V:%p P:%p => %p", map.va, map.pa,
+                                   new_pa);
+      map.pa = new_pa;
+      need_refresh = true;
+    }
+    return need_refresh;
+  }
+
+ private:
+  std::vector<V2PMap> v2p_map_;
+  mutable KSPIN_LOCK v2p_map_spinlock_;
+};
+
+struct RweData {
+  RweLastData last_data;
+};
+
+struct RweSharedData {
+  AddressRanges src_ranges;
+  AddressRanges dst_ranges;
+  V2PMap2 v2p_map;
+};
+
+static RweSharedData g_rwep_shared_data;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
 
+#if defined(ALLOC_PRAGMA)
+#pragma alloc_text(INIT, RweAllocData)
+#pragma alloc_text(INIT, RweSetDefaultEptAttributes)
+#pragma alloc_text(PAGE, RweFreeData)
+#pragma alloc_text(PAGE, RweApplyRanges)
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // variables
 //
-
-static std::vector<AddressRange> g_rwep_src_ranges;
-static std::vector<AddressRange> g_rwep_dst_ranges;
-
-static KSPIN_LOCK g_rwep_src_ranges_spinlock;
-static KSPIN_LOCK g_rwep_dst_ranges_spinlock;
-
-static rwe_last_info g_rwep_last_info;
-
-static std::vector<VitualAndPhysicalMap> g_rwep_vp_maps;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 // implementations
 //
 
-NTSTATUS RweInitialization() {
-  KeInitializeSpinLock(&g_rwep_src_ranges_spinlock);
-  KeInitializeSpinLock(&g_rwep_dst_ranges_spinlock);
-  return STATUS_SUCCESS;
+RweData* RweAllocData() {
+  PAGED_CODE();
+  return new RweData;
 }
 
-void RweTermination() {}
-
-//
-void RewpAddToMap(const AddressRange& range) {
-  auto& vp_maps = g_rwep_vp_maps;
-
-  const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-      range.start_address, range.end_address - range.start_address + 1);
-  for (auto page_index = 0ul; page_index < pages; ++page_index) {
-    const auto va_base =
-        PAGE_ALIGN(range.start_address + PAGE_SIZE * page_index);
-    const auto pa_base = UtilPaFromVa(va_base);
-    VitualAndPhysicalMap map = {va_base, pa_base};
-    vp_maps.push_back(map);
-
-    HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", map.va, map.pa);
-  }
+void RweFreeData(RweData* rwe_data) {
+  PAGED_CODE();
+  delete rwe_data;
 }
 
-//
-// Range Manipulation
-//
 void RweAddSrcRange(ULONG_PTR address, SIZE_T size) {
   AddressRange range = {address, address + size - 1};
-  HYPERPLATFORM_LOG_DEBUG_SAFE("Add SRC rabge: %p - %p", range.start_address,
+  HYPERPLATFORM_LOG_DEBUG_SAFE("Add SRC range: %p - %p", range.start_address,
                                range.end_address);
-
-  KLOCK_QUEUE_HANDLE lock_handle = {};
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_rwep_src_ranges_spinlock,
-                                           &lock_handle);
-
-  g_rwep_src_ranges.push_back(range);
-
-  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
-
-  RewpAddToMap(range);
+  g_rwep_shared_data.src_ranges.add(range);
+  g_rwep_shared_data.v2p_map.add(range);
 }
 
 void RweAddDstRange(ULONG_PTR address, SIZE_T size) {
   AddressRange range = {address, address + size - 1};
-  HYPERPLATFORM_LOG_DEBUG_SAFE("Add DST rabge: %p - %p", range.start_address,
+  HYPERPLATFORM_LOG_DEBUG_SAFE("Add DST range: %p - %p", range.start_address,
                                range.end_address);
-
-  KLOCK_QUEUE_HANDLE lock_handle = {};
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_rwep_dst_ranges_spinlock,
-                                           &lock_handle);
-
-  g_rwep_dst_ranges.push_back(range);
-
-  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
-
-  RewpAddToMap(range);
+  g_rwep_shared_data.dst_ranges.add(range);
+  g_rwep_shared_data.v2p_map.add(range);
 }
 
 bool RweIsInsideSrcRange(ULONG_PTR address) {
-  KLOCK_QUEUE_HANDLE lock_handle = {};
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_rwep_src_ranges_spinlock,
-                                           &lock_handle);
-
-  bool inside = false;
-  for (const auto& range : g_rwep_src_ranges) {
-    if (UtilIsInBounds(address, range.start_address, range.end_address)) {
-      inside = true;
-      break;
-    }
-  }
-
-  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
-  return inside;
+  return g_rwep_shared_data.src_ranges.is_in_range(address);
 }
 
 bool RweIsInsideDstRange(ULONG_PTR address) {
-  KLOCK_QUEUE_HANDLE lock_handle = {};
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_rwep_dst_ranges_spinlock,
-                                           &lock_handle);
-
-  bool inside = false;
-  for (const auto& range : g_rwep_dst_ranges) {
-    if (UtilIsInBounds(address, range.start_address, range.end_address)) {
-      inside = true;
-      break;
-    }
-  }
-
-  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle);
-  return inside;
+  return g_rwep_shared_data.dst_ranges.is_in_range(address);
 }
 
 // Make all non-executable for MONITOR
 void RweSetDefaultEptAttributes(ProcessorData* processor_data) {
+  PAGED_CODE();
+
   const auto pm_ranges = UtilGetPhysicalMemoryRanges();
   for (auto run_index = 0ul; run_index < pm_ranges->number_of_runs;
        ++run_index) {
@@ -188,12 +264,12 @@ void RweSetDefaultEptAttributes(ProcessorData* processor_data) {
       ept_entry->fields.execute_access = false;
     }
   }
-  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RWE D:RWE O:RWE *");
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RW- D:RW- O:RW- *");
 }
 
 // Apply ranges to EPT attributes
 void RweApplyRanges() {
+  PAGED_CODE();
+
   UtilForEachProcessor(
       [](void* context) {
         UNREFERENCED_PARAMETER(context);
@@ -225,8 +301,6 @@ static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
                                        ULONG_PTR fault_va) {
   if (RweIsInsideSrcRange(fault_va)) {
     // Someone is entering a source range
-
-    // RweHandleTlbFlush(processor_data);
 
     // Currently
     //        E   RW
@@ -294,10 +368,21 @@ static void RewpSetReadWriteOnPage(bool allow_read_write,
   UtilInveptAll();
 }
 
-static void RewpHandleReadWriteViolation(EptData* ept_data, ULONG_PTR guest_ip,
-                                         ULONG_PTR fault_va, bool is_write) {
-  auto& last_info = g_rwep_last_info;
-  NT_ASSERT(!last_info.ept_entry);
+static void* RwepContextCopyMemory(_Out_ void* destination,
+                                   _In_ void const* source,
+                                   _In_ SIZE_T length) {
+  const auto current_cr3 = __readcr3();
+  const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
+  __writecr3(guest_cr3);
+  const auto result = RtlCopyMemory(destination, source, length);
+  __writecr3(current_cr3);
+  return result;
+}
+
+static void RewpHandleReadWriteViolation(ProcessorData* processor_data,
+                                         ULONG_PTR guest_ip, ULONG_PTR fault_va,
+                                         bool is_write) {
+  NT_ASSERT(!processor_data->rwe_data->last_data.ept_entry);
 
   // Read or write from a source range to a dest range
   NT_ASSERT(RweIsInsideSrcRange(guest_ip));
@@ -312,7 +397,7 @@ static void RewpHandleReadWriteViolation(EptData* ept_data, ULONG_PTR guest_ip,
   NT_ASSERT(RweIsInsideDstRange(fault_va));
 
   const auto ept_entry = EptGetEptPtEntry(
-      ept_data, UtilVmRead64(VmcsField::kGuestPhysicalAddress));
+      processor_data->ept_data, UtilVmRead64(VmcsField::kGuestPhysicalAddress));
 
   // Tempolarily switch to
   //        E   RW
@@ -324,22 +409,16 @@ static void RewpHandleReadWriteViolation(EptData* ept_data, ULONG_PTR guest_ip,
                                PAGE_ALIGN(fault_va));
   RewpSetMonitorTrapFlag(true);
 
-  last_info.ept_entry = ept_entry;
+  processor_data->rwe_data->last_data.is_write = is_write;
+  processor_data->rwe_data->last_data.guest_ip = guest_ip;
+  processor_data->rwe_data->last_data.fault_va = fault_va;
+  processor_data->rwe_data->last_data.ept_entry = ept_entry;
   if (is_write) {
-    last_info.guest_ip = guest_ip;
-    last_info.fault_va = fault_va;
-    const auto current_cr3 = __readcr3();
-    const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
-    __writecr3(guest_cr3);
-    RtlCopyMemory(last_info.old_bytes.data(), reinterpret_cast<void*>(fault_va),
-                  last_info.old_bytes.size());
-    __writecr3(current_cr3);
-
+    RwepContextCopyMemory(processor_data->rwe_data->last_data.old_bytes.data(),
+                          reinterpret_cast<void*>(fault_va),
+                          processor_data->rwe_data->last_data.old_bytes.size());
   } else {
-    last_info.guest_ip = 0;
-    last_info.fault_va = 0;
-    RtlZeroMemory(last_info.old_bytes.data(), last_info.old_bytes.size());
-    HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= R", guest_ip, fault_va);
+    processor_data->rwe_data->last_data.old_bytes.fill(0);
   }
 }
 
@@ -351,7 +430,7 @@ void RweHandleEptViolation(ProcessorData* processor_data, ULONG_PTR guest_ip,
   if (execute_violation) {
     RwepHandleExecuteViolation(processor_data, fault_va);
   } else if (read_violation || write_violation) {
-    RewpHandleReadWriteViolation(processor_data->ept_data, guest_ip, fault_va,
+    RewpHandleReadWriteViolation(processor_data, guest_ip, fault_va,
                                  write_violation);
   } else {
     HYPERPLATFORM_COMMON_BUG_CHECK(HyperPlatformBugCheck::kUnspecified, 0, 0,
@@ -359,200 +438,126 @@ void RweHandleEptViolation(ProcessorData* processor_data, ULONG_PTR guest_ip,
   }
 }
 
-void RweHandleMonitorTrapFlag() {
-  // HYPERPLATFORM_COMMON_DBG_BREAK();
-  auto& last_info = g_rwep_last_info;
-  NT_ASSERT(last_info.ept_entry);
+static NTSTATUS RwepBytesToString(char* buffer, SIZE_T buffer_size,
+                                  const UCHAR* bytes, SIZE_T bytes_size) {
+  for (auto i = 0ul; i < bytes_size; ++i) {
+    const auto consumed_bytes = i * 3;
+    const auto remaining_size = buffer_size - consumed_bytes;
+    const auto status = RtlStringCchPrintfA(buffer + consumed_bytes,
+                                            remaining_size, "%02x ", bytes[i]);
+    if (!NT_SUCCESS(status)) {
+      NT_ASSERT(false);
+      return status;
+    }
+  }
+  buffer[buffer_size - 1] = '\0';
+  return STATUS_SUCCESS;
+}
+
+void RweHandleMonitorTrapFlag(ProcessorData* processor_data) {
+  NT_ASSERT(processor_data->rwe_data->last_data.ept_entry);
 
   // Revert to
   //        E   RW
   //  Src   o   o
   //  Dst   x   x
   //  Oth   x   o
-  RewpSetReadWriteOnPage(false, last_info.ept_entry);
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p",
-                               PAGE_ALIGN(last_info.fault_va));
+  RewpSetReadWriteOnPage(false, processor_data->rwe_data->last_data.ept_entry);
+  HYPERPLATFORM_LOG_DEBUG_SAFE(
+      "MONITOR: S:RWE D:--- O:RW- %p",
+      PAGE_ALIGN(processor_data->rwe_data->last_data.fault_va));
   RewpSetMonitorTrapFlag(false);
 
-  // was the last access write?
-  if (last_info.guest_ip) {
-    char old_bytes_string[3 * sizeof(last_info.old_bytes)];
-    for (auto i = 0ul; i < sizeof(last_info.old_bytes); ++i) {
-      const auto consumed_bytes = i * 3;
-      const auto buffer_size = sizeof(old_bytes_string) - consumed_bytes;
-      RtlStringCchPrintfA(old_bytes_string + consumed_bytes, buffer_size,
-                          "%02x ", last_info.old_bytes[i]);
-    }
-    old_bytes_string[sizeof(old_bytes_string) - 1] = '\0';
+  if (processor_data->rwe_data->last_data.is_write) {
+    static const auto kBinaryStringSize = kRwepWriteMonitorSize * 3 + 1;
 
-    UCHAR current_bytes[sizeof(last_info.old_bytes)];
-    const auto current_cr3 = __readcr3();
-    const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
-    __writecr3(guest_cr3);
-    RtlCopyMemory(current_bytes, reinterpret_cast<void*>(last_info.fault_va),
-                  sizeof(current_bytes));
-    __writecr3(current_cr3);
+    UCHAR new_bytes[kRwepWriteMonitorSize];
+    RwepContextCopyMemory(
+        new_bytes,
+        reinterpret_cast<void*>(processor_data->rwe_data->last_data.fault_va),
+        sizeof(new_bytes));
 
-    char current_bytes_string[3 * sizeof(current_bytes)];
-    for (auto i = 0ul; i < sizeof(current_bytes); ++i) {
-      const auto consumed_bytes = i * 3;
-      const auto buffer_size = sizeof(current_bytes_string) - consumed_bytes;
-      RtlStringCchPrintfA(current_bytes_string + consumed_bytes, buffer_size,
-                          "%02x ", current_bytes[i]);
-    }
-    current_bytes_string[sizeof(current_bytes_string) - 1] = '\0';
+    char new_bytes_string[kBinaryStringSize];
+    RwepBytesToString(new_bytes_string, sizeof(new_bytes_string), new_bytes,
+                      sizeof(new_bytes));
+
+    char old_bytes_string[kBinaryStringSize];
+    RwepBytesToString(old_bytes_string, sizeof(old_bytes_string),
+                      processor_data->rwe_data->last_data.old_bytes.data(),
+                      processor_data->rwe_data->last_data.old_bytes.size());
 
     HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= W, %s => %s",
-                                last_info.guest_ip, last_info.fault_va,
-                                old_bytes_string, current_bytes_string);
+                                processor_data->rwe_data->last_data.guest_ip,
+                                processor_data->rwe_data->last_data.fault_va,
+                                old_bytes_string, new_bytes_string);
 
-    last_info.guest_ip = 0;
-    last_info.fault_va = 0;
-    RtlZeroMemory(last_info.old_bytes.data(), last_info.old_bytes.size());
+  } else {
+    HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= R",
+                                processor_data->rwe_data->last_data.guest_ip,
+                                processor_data->rwe_data->last_data.fault_va);
   }
-  last_info.ept_entry = nullptr;
+  processor_data->rwe_data->last_data.is_write = false;
+  processor_data->rwe_data->last_data.guest_ip = 0;
+  processor_data->rwe_data->last_data.fault_va = 0;
+  processor_data->rwe_data->last_data.ept_entry = nullptr;
+  processor_data->rwe_data->last_data.old_bytes.fill(0);
+}
+
+// Make source ranges non-executable for normal pages and executable for
+// monitor pages
+static bool RwepSrcPageCallback(ULONG_PTR va, ULONG64 pa, void* context) {
+  if (!pa) {
+    HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
+    return true;
+  }
+
+  const auto processor_data = reinterpret_cast<ProcessorData*>(context);
+
+  const auto ept_entry_n =
+      EptGetEptPtEntry(processor_data->ept_data_normal, pa);
+  ept_entry_n->fields.execute_access = false;
+
+  const auto ept_entry_m =
+      EptGetEptPtEntry(processor_data->ept_data_monitor, pa);
+  ept_entry_m->fields.execute_access = true;
+
+  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RW- D:RWE O:RWE %p", PAGE_ALIGN(va));
+  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p", PAGE_ALIGN(va));
+  return true;
+}
+
+// Make dest ranges non-readable/writable/executable for monitor pages
+static bool RwepDstPageCallback(ULONG_PTR va, ULONG64 pa, void* context) {
+  if (!pa) {
+    HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
+    return true;
+  }
+
+  const auto processor_data = reinterpret_cast<ProcessorData*>(context);
+  const auto ept_entry = EptGetEptPtEntry(processor_data->ept_data_monitor, pa);
+  ept_entry->fields.execute_access = false;
+  ept_entry->fields.write_access = false;
+  ept_entry->fields.read_access = false;
+  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p", PAGE_ALIGN(va));
+  return true;
 }
 
 // Apply ranges to EPT attributes
 void RweVmcallApplyRanges(ProcessorData* processor_data) {
   NT_ASSERT(processor_data->ept_data == processor_data->ept_data_normal);
 
-  // Make source ranges non-executable for normal pages and executable for
-  // monitor pages
-  for (const auto& src_ragne : g_rwep_src_ranges) {
-    const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-        src_ragne.start_address,
-        src_ragne.end_address - src_ragne.start_address + 1);
-    for (auto page_index = 0ul; page_index < pages; ++page_index) {
-      const auto va = src_ragne.start_address + PAGE_SIZE * page_index;
-      const auto pa = UtilPaFromVa(reinterpret_cast<void*>(va));
-      if (!pa) {
-        HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.",
-                                     va);
-        continue;
-      }
-
-      const auto ept_entry_n =
-          EptGetEptPtEntry(processor_data->ept_data_normal, pa);
-      ept_entry_n->fields.execute_access = false;
-
-      const auto ept_entry_m =
-          EptGetEptPtEntry(processor_data->ept_data_monitor, pa);
-      ept_entry_m->fields.execute_access = true;
-
-      HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RW- D:RWE O:RWE %p",
-                                   PAGE_ALIGN(va));
-      HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
-                                   PAGE_ALIGN(va));
-    }
-  }
-
-  // Make dest ranges non-readable/writable/executable for monitor pages
-  for (const auto& dst_ragne : g_rwep_dst_ranges) {
-    const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-        dst_ragne.start_address,
-        dst_ragne.end_address - dst_ragne.start_address + 1);
-    for (auto page_index = 0ul; page_index < pages; ++page_index) {
-      const auto va = dst_ragne.start_address + PAGE_SIZE * page_index;
-      const auto pa = UtilPaFromVa(reinterpret_cast<void*>(va));
-      if (!pa) {
-        HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.",
-                                     va);
-        continue;
-      }
-
-      const auto ept_entry =
-          EptGetEptPtEntry(processor_data->ept_data_monitor, pa);
-      ept_entry->fields.execute_access = false;
-      ept_entry->fields.write_access = false;
-      ept_entry->fields.read_access = false;
-      HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p",
-                                   PAGE_ALIGN(va));
-    }
-  }
+  g_rwep_shared_data.src_ranges.for_each_page(RwepSrcPageCallback,
+                                              processor_data);
+  g_rwep_shared_data.dst_ranges.for_each_page(RwepDstPageCallback,
+                                              processor_data);
 
   UtilInveptAll();
 }
 
 void RweHandleTlbFlush(ProcessorData* processor_data) {
-  auto& vp_maps = g_rwep_vp_maps;
-  bool need_refresh = false;
-
-  for (auto& map : vp_maps) {
-    NT_ASSERT(map.va == PAGE_ALIGN(map.va));
-    NT_ASSERT(map.pa == (ULONG64)PAGE_ALIGN(map.pa));
-    const auto new_pa = UtilPaFromVa(map.va);
-    if (new_pa != map.pa) {
-      need_refresh = true;
-
-      if (map.pa) {
-        const auto old_ept_entry_n =
-            EptGetEptPtEntry(processor_data->ept_data_normal, map.pa);
-        const auto old_ept_entry_m =
-            EptGetEptPtEntry(processor_data->ept_data_monitor, map.pa);
-        NT_ASSERT(old_ept_entry_n && old_ept_entry_n->all);
-        NT_ASSERT(old_ept_entry_m && old_ept_entry_m->all);
-
-        old_ept_entry_n->fields.read_access = true;
-        old_ept_entry_n->fields.write_access = true;
-        old_ept_entry_n->fields.execute_access = true;
-        old_ept_entry_m->fields.read_access = true;
-        old_ept_entry_m->fields.write_access = true;
-        // monitor pages are not executable by default
-        old_ept_entry_m->fields.execute_access = false;
-      }
-
-      HYPERPLATFORM_LOG_DEBUG_SAFE("Map: V:%p P:%p => %p", map.va, map.pa,
-                                   new_pa);
-      map.pa = new_pa;
-    }
-  }
-
-  if (need_refresh) {
+  if (g_rwep_shared_data.v2p_map.refresh(processor_data)) {
     RweVmcallApplyRanges(processor_data);
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-static ULONG_PTR g_pfp_last_ip;
-
-#pragma section(".asm", read, execute)
-__declspec(allocate(".asm")) static const UCHAR PageFaultpBreakPoint[] = {0xcc};
-
-void PageFaultpHanlePageFault(void* guest_ip, ULONG_PTR fault_address) {
-  UNREFERENCED_PARAMETER(guest_ip);
-  UNREFERENCED_PARAMETER(fault_address);
-
-  if (guest_ip < MmSystemRangeStart) {
-    return;
-  }
-  if (g_pfp_last_ip) {
-    return;
-  }
-
-  // Update guest's IP
-  UtilVmWrite(VmcsField::kGuestRip, (ULONG_PTR)&PageFaultpBreakPoint);
-
-  NT_ASSERT(!g_pfp_last_ip);
-  g_pfp_last_ip = (ULONG_PTR)guest_ip;
-}
-
-bool PageFaultpHandleBreakpoint(void* guest_ip, ProcessorData* processor_data) {
-  if (guest_ip != PageFaultpBreakPoint) {
-    return false;
-  }
-
-  // HYPERPLATFORM_COMMON_DBG_BREAK();
-
-  NT_ASSERT(g_pfp_last_ip);
-  const auto original_ip = g_pfp_last_ip;
-  g_pfp_last_ip = 0;
-
-  // Update guest's IP
-  UtilVmWrite(VmcsField::kGuestRip, original_ip);
-  RweHandleTlbFlush(processor_data);
-  return true;
 }
 
 }  // extern "C"

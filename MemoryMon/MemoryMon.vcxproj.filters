@@ -66,6 +66,9 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\global_object.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="pagefault.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="memorymon.h">
@@ -123,6 +126,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\global_object.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pagefault.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
