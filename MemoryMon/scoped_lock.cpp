@@ -37,7 +37,7 @@
 // implementations
 //
 
-ScopedLock::ScopedLock(KSPIN_LOCK* spin_lock) : spin_lock_(spin_lock_) {
+ScopedLock::ScopedLock(KSPIN_LOCK* spin_lock) : spin_lock_(spin_lock) {
   KeAcquireInStackQueuedSpinLockAtDpcLevel(spin_lock, &lock_handle_);
 }
 
