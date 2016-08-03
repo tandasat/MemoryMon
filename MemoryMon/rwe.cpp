@@ -31,7 +31,7 @@ extern "C" {
 
 // xmmN is 128 bits (memmove etc)
 // zmmN is 512 bits (AVX-512)
-static const auto kRwepWriteMonitorSize = 16;
+static const auto kRwepNumOfMonitoredBytesForWrite = 16;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -48,7 +48,7 @@ struct RweLastData {
   void* guest_ip;
   void* fault_va;
   EptCommonEntry* ept_entry;
-  std::array<UCHAR, kRwepWriteMonitorSize> old_bytes;
+  std::array<UCHAR, kRwepNumOfMonitoredBytesForWrite> old_bytes;
 
   RweLastData()
       : is_write(false), guest_ip(0), fault_va(0), ept_entry(nullptr) {}
@@ -188,6 +188,8 @@ static RweSharedData g_rwep_shared_data;
 // prototypes
 //
 
+static KDEFERRED_ROUTINE RwepApplyRangesDpcRoutine;
+
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, RweAllocData)
 #pragma alloc_text(INIT, RweSetDefaultEptAttributes)
@@ -276,8 +278,8 @@ _Use_decl_annotations_ void RweApplyRanges() {
 }
 
 _Use_decl_annotations_ static void RwepApplyRangesDpcRoutine(
-  _KDPC* Dpc,  PVOID DeferredContext,
-     PVOID SystemArgument1,  PVOID SystemArgument2) {
+    _KDPC* Dpc, PVOID DeferredContext, PVOID SystemArgument1,
+    PVOID SystemArgument2) {
   UNREFERENCED_PARAMETER(DeferredContext);
   UNREFERENCED_PARAMETER(SystemArgument1);
   UNREFERENCED_PARAMETER(SystemArgument2);
@@ -286,57 +288,46 @@ _Use_decl_annotations_ static void RwepApplyRangesDpcRoutine(
   ExFreePoolWithTag(Dpc, kHyperPlatformCommonPoolTag);
 }
 
-_Use_decl_annotations_ static NTSTATUS RwepApplyRangesDpc() {
-  const auto number_of_processors =
-      KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
-  for (ULONG processor_index = 0; processor_index < number_of_processors;
-       processor_index++) {
-    PROCESSOR_NUMBER processor_number = {};
-    auto status =
-        KeGetProcessorNumberFromIndex(processor_index, &processor_number);
-    if (!NT_SUCCESS(status)) {
-      return status;
-    }
-
-    const auto dpc = reinterpret_cast<PRKDPC>(ExAllocatePoolWithTag(
-        NonPagedPool, sizeof(KDPC), kHyperPlatformCommonPoolTag));
-    if (!dpc) {
-      return STATUS_MEMORY_NOT_ALLOCATED;
-    }
-    KeInitializeDpc(dpc, RwepApplyRangesDpcRoutine, nullptr);
-    status = KeSetTargetProcessorDpcEx(dpc, &processor_number);
-    if (!NT_SUCCESS(status)) {
-      ExFreePoolWithTag(dpc, kHyperPlatformCommonPoolTag);
-      return status;
-    }
-    KeInsertQueueDpc(dpc, nullptr, nullptr);
-  }
-  return STATUS_SUCCESS;
-}
-
 //
 // VMM code
 //
+static void RweSwtichToNormalMode(_Inout_ ProcessorData* processor_data);
+static void RwepSwitchToMonitoringMode(_Inout_ ProcessorData* processor_data);
+static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
+                                       _In_ void* fault_va);
+static void RewpSetMonitorTrapFlag(_In_ bool enable);
+static void RewpSetReadWriteOnPage(_In_ bool allow_read_write,
+                                   _Out_ EptCommonEntry* ept_entry);
+static void* RwepContextCopyMemory(_Out_ void* destination,
+                                   _In_ const void* source, _In_ SIZE_T length);
+static void RewpHandleReadWriteViolation(_Inout_ ProcessorData* processor_data,
+                                         _In_ void* guest_ip,
+                                         _In_ void* fault_va,
+                                         _In_ bool is_write);
+static NTSTATUS RwepBytesToString(_Out_ char* buffer, _In_ SIZE_T buffer_size,
+                                  _In_ const UCHAR* bytes,
+                                  _In_ SIZE_T bytes_size);
+
 _Use_decl_annotations_ static void RweSwtichToNormalMode(
-    _Inout_ ProcessorData* processor_data) {
+    ProcessorData* processor_data) {
   processor_data->ept_data = processor_data->ept_data_normal;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR => NORMAL");
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR => NORMAL");
   UtilInveptAll();
 }
 
 _Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
-    _Inout_ ProcessorData* processor_data) {
+    ProcessorData* processor_data) {
   processor_data->ept_data = processor_data->ept_data_monitor;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
-  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL  => MONITOR");
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL  => MONITOR");
   UtilInveptAll();
 }
 
 _Use_decl_annotations_ static void RwepHandleExecuteViolation(
-    _Inout_ ProcessorData* processor_data, void* fault_va) {
+    ProcessorData* processor_data, void* fault_va) {
   if (RweIsInsideSrcRange(fault_va)) {
     // Someone is entering a source range
 
@@ -406,8 +397,9 @@ _Use_decl_annotations_ static void RewpSetReadWriteOnPage(
   UtilInveptAll();
 }
 
-_Use_decl_annotations_ static void* RwepContextCopyMemory(
-    _Out_ void* destination, _In_ void const* source, _In_ SIZE_T length) {
+_Use_decl_annotations_ static void* RwepContextCopyMemory(void* destination,
+                                                          const void* source,
+                                                          SIZE_T length) {
   const auto current_cr3 = __readcr3();
   const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
   __writecr3(guest_cr3);
@@ -442,8 +434,8 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   //  Dst   x   o
   //  Oth   x   o
   RewpSetReadWriteOnPage(true, ept_entry);
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
-                               PAGE_ALIGN(fault_va));
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
+  //                             PAGE_ALIGN(fault_va));
   RewpSetMonitorTrapFlag(true);
 
   processor_data->rwe_data->last_data.is_write = is_write;
@@ -451,9 +443,10 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   processor_data->rwe_data->last_data.fault_va = fault_va;
   processor_data->rwe_data->last_data.ept_entry = ept_entry;
   if (is_write) {
-    RwepContextCopyMemory(processor_data->rwe_data->last_data.old_bytes.data(),
-                          reinterpret_cast<void*>(fault_va),
-                          processor_data->rwe_data->last_data.old_bytes.size());
+    RwepContextCopyMemory(
+        processor_data->rwe_data->last_data.old_bytes.data(),
+        reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(fault_va) & ~0xf),
+        processor_data->rwe_data->last_data.old_bytes.size());
   } else {
     processor_data->rwe_data->last_data.old_bytes.fill(0);
   }
@@ -462,8 +455,6 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
 _Use_decl_annotations_ void RweHandleEptViolation(
     ProcessorData* processor_data, void* guest_ip, void* fault_va,
     bool read_violation, bool write_violation, bool execute_violation) {
-  // HYPERPLATFORM_COMMON_DBG_BREAK();
-
   if (execute_violation) {
     RwepHandleExecuteViolation(processor_data, fault_va);
   } else if (read_violation || write_violation) {
@@ -503,18 +494,23 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
   //  Dst   x   x
   //  Oth   x   o
   RewpSetReadWriteOnPage(false, processor_data->rwe_data->last_data.ept_entry);
-  HYPERPLATFORM_LOG_DEBUG_SAFE(
-      "MONITOR: S:RWE D:--- O:RW- %p",
-      PAGE_ALIGN(processor_data->rwe_data->last_data.fault_va));
+  // HYPERPLATFORM_LOG_DEBUG_SAFE(
+  //    "MONITOR: S:RWE D:--- O:RW- %p",
+  //    PAGE_ALIGN(processor_data->rwe_data->last_data.fault_va));
   RewpSetMonitorTrapFlag(false);
 
   if (processor_data->rwe_data->last_data.is_write) {
-    static const auto kBinaryStringSize = kRwepWriteMonitorSize * 3 + 1;
+    static const auto kBinaryStringSize =
+        kRwepNumOfMonitoredBytesForWrite * 3 + 1;
 
-    UCHAR new_bytes[kRwepWriteMonitorSize];
+    UCHAR new_bytes[kRwepNumOfMonitoredBytesForWrite];
     RwepContextCopyMemory(
         new_bytes,
-        reinterpret_cast<void*>(processor_data->rwe_data->last_data.fault_va),
+
+        reinterpret_cast<void*>(
+            reinterpret_cast<ULONG_PTR>(
+                processor_data->rwe_data->last_data.fault_va) &
+            ~0xf),
         sizeof(new_bytes));
 
     char new_bytes_string[kBinaryStringSize];
@@ -599,7 +595,7 @@ _Use_decl_annotations_ void RweVmcallApplyRanges(
 
 _Use_decl_annotations_ void RweHandleTlbFlush(ProcessorData* processor_data) {
   if (g_rwep_shared_data.v2p_map.refresh(processor_data)) {
-    RwepApplyRangesDpc();
+    UtilForEachProcessorDpc(RwepApplyRangesDpcRoutine, nullptr);
   }
 }
 

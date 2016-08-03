@@ -40,7 +40,7 @@
 // implementations
 //
 
-_Use_decl_annotations_ PageFaultRecord::PageFaultRecord() {
+/*_Use_decl_annotations_*/ PageFaultRecord::PageFaultRecord() {
   KeInitializeSpinLock(&record_spinlock_);
 }
 

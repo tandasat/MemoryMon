@@ -42,6 +42,6 @@ _Use_decl_annotations_ ScopedLock::ScopedLock(KSPIN_LOCK* spinlock_)
   KeAcquireInStackQueuedSpinLockAtDpcLevel(spinlock_, &lock_handle_);
 }
 
-_Use_decl_annotations_ ScopedLock::~ScopedLock() {
+/*_Use_decl_annotations_*/ ScopedLock::~ScopedLock() {
   KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle_);
 }
