@@ -24,6 +24,13 @@ extern "C" {
 // constants and macros
 //
 
+// Locate 0xcc on a discrete section so that it cannot be affected by any src
+// or dest ranges used in tests. This code can be located on .text when we made
+// sure any test code did not affect to kPageFaultpBreakPoint. For the same
+// reason, nt!DbgBreakPoint is not used at this moment.
+//
+// Note that this handler cannot be used for #PF occured in ring-3 context, as
+// the Requested Privilege Level of this code is 0, obviously.
 __declspec(allocate(".asm")) static const UCHAR kPageFaultpBreakPoint[] = {
     0xcc};
 
@@ -49,6 +56,8 @@ static PageFaultRecord g_pfp_record;
 // implementations
 //
 
+// Change guest's IP to kPageFaultpBreakPoint up on #PF on kernel address space
+// so that #BP VM-exit occurs on complition of #PF handler
 _Use_decl_annotations_ bool PageFaultHanlePageFault(void* guest_ip) {
   if (guest_ip < MmSystemRangeStart) {
     return false;
@@ -63,6 +72,8 @@ _Use_decl_annotations_ bool PageFaultHanlePageFault(void* guest_ip) {
   return true;
 }
 
+// Checks whether the #BP occured up on complition of #PF handler, and so,
+// restores an original IP to continue guest execution as it should be
 _Use_decl_annotations_ bool PageFaultHandleBreakpoint(void* guest_ip) {
   if (guest_ip != kPageFaultpBreakPoint) {
     return false;
