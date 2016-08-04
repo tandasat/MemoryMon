@@ -76,7 +76,8 @@ class AddressRanges {
     return inside;
   }
 
-  using ForEachCallback = bool (*)(void* va, ULONG64 pa, void* context);
+  using ForEachCallback = bool (*)(_In_ void* va, _In_ ULONG64 pa,
+                                   _In_opt_ void* context);
 
   void for_each_page(ForEachCallback callback, void* context) {
     // ScopedLock lock(&ranges_spinlock_);
@@ -278,14 +279,14 @@ _Use_decl_annotations_ void RweApplyRanges() {
 }
 
 _Use_decl_annotations_ static void RwepApplyRangesDpcRoutine(
-    _KDPC* Dpc, PVOID DeferredContext, PVOID SystemArgument1,
-    PVOID SystemArgument2) {
-  UNREFERENCED_PARAMETER(DeferredContext);
-  UNREFERENCED_PARAMETER(SystemArgument1);
-  UNREFERENCED_PARAMETER(SystemArgument2);
+    _KDPC* dpc, PVOID deferred_context, PVOID system_argument1,
+    PVOID system_argument2) {
+  UNREFERENCED_PARAMETER(deferred_context);
+  UNREFERENCED_PARAMETER(system_argument1);
+  UNREFERENCED_PARAMETER(system_argument2);
 
   UtilVmCall(HypercallNumber::kRweApplyRanges, nullptr);
-  ExFreePoolWithTag(Dpc, kHyperPlatformCommonPoolTag);
+  ExFreePoolWithTag(dpc, kHyperPlatformCommonPoolTag);
 }
 
 //
@@ -348,8 +349,11 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     const auto guest_sp =
         reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
     const auto return_address = *guest_sp;
+    const auto return_base = UtilPcToFileHeader(return_address);
+    const auto fault_base = UtilPcToFileHeader(fault_va);
     // TODO: IsExecutable?
-    HYPERPLATFORM_LOG_INFO_SAFE("R= %p, D= %p, T= E", return_address, fault_va);
+    HYPERPLATFORM_LOG_INFO_SAFE("R= %p (%p), D= %p (%p), T= E", return_address,
+                                return_base, fault_va, fault_base);
 
   } else {
     // Presumably, someone is leaving a source range
@@ -377,8 +381,11 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //    - conditional and unconditional jump from a source range to other
     //    range
     if (RweIsInsideSrcRange(return_address)) {
-      HYPERPLATFORM_LOG_INFO_SAFE("R= %p, D= %p, T= E", return_address,
-                                  fault_va);
+      const auto return_base = UtilPcToFileHeader(return_address);
+      const auto fault_base = UtilPcToFileHeader(fault_va);
+      HYPERPLATFORM_LOG_INFO_SAFE("R= %p (%p), D= %p (%p), T= E",
+                                  return_address, return_base, fault_va,
+                                  fault_base);
     }
   }
 }
@@ -499,18 +506,21 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
   //    PAGE_ALIGN(processor_data->rwe_data->last_data.fault_va));
   RewpSetMonitorTrapFlag(false);
 
+  const auto guest_ip_base =
+      UtilPcToFileHeader(processor_data->rwe_data->last_data.guest_ip);
+  const auto fault_va_base =
+      UtilPcToFileHeader(processor_data->rwe_data->last_data.fault_va);
+
   if (processor_data->rwe_data->last_data.is_write) {
     static const auto kBinaryStringSize =
         kRwepNumOfMonitoredBytesForWrite * 3 + 1;
 
     UCHAR new_bytes[kRwepNumOfMonitoredBytesForWrite];
     RwepContextCopyMemory(
-        new_bytes,
-
-        reinterpret_cast<void*>(
-            reinterpret_cast<ULONG_PTR>(
-                processor_data->rwe_data->last_data.fault_va) &
-            ~0xf),
+        new_bytes, reinterpret_cast<void*>(
+                       reinterpret_cast<ULONG_PTR>(
+                           processor_data->rwe_data->last_data.fault_va) &
+                       ~0xf),
         sizeof(new_bytes));
 
     char new_bytes_string[kBinaryStringSize];
@@ -522,15 +532,17 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
                       processor_data->rwe_data->last_data.old_bytes.data(),
                       processor_data->rwe_data->last_data.old_bytes.size());
 
-    HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= W, %s => %s",
-                                processor_data->rwe_data->last_data.guest_ip,
-                                processor_data->rwe_data->last_data.fault_va,
-                                old_bytes_string, new_bytes_string);
+    HYPERPLATFORM_LOG_INFO_SAFE(
+        "S= %p (%p), D= %p (%p), T= W, %s => %s",
+        processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
+        processor_data->rwe_data->last_data.fault_va, fault_va_base,
+        old_bytes_string, new_bytes_string);
 
   } else {
-    HYPERPLATFORM_LOG_INFO_SAFE("S= %p, D= %p, T= R",
-                                processor_data->rwe_data->last_data.guest_ip,
-                                processor_data->rwe_data->last_data.fault_va);
+    HYPERPLATFORM_LOG_INFO_SAFE(
+        "S= %p (%p), D= %p (%p), T= R",
+        processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
+        processor_data->rwe_data->last_data.fault_va, fault_va_base);
   }
   processor_data->rwe_data->last_data.is_write = false;
   processor_data->rwe_data->last_data.guest_ip = 0;
@@ -539,10 +551,17 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
   processor_data->rwe_data->last_data.old_bytes.fill(0);
 }
 
+static bool RwepSrcPageCallback(_In_ void* va, _In_ ULONG64 pa,
+                                _In_opt_ void* context);
+static bool RwepDstPageCallback(_In_ void* va, _In_ ULONG64 pa,
+                                _In_opt_ void* context);
+
 // Make source ranges non-executable for normal pages and executable for
 // monitor pages
 _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
                                                        void* context) {
+  NT_ASSERT(context);
+
   if (!pa) {
     HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
@@ -566,6 +585,8 @@ _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
 // Make dest ranges non-readable/writable/executable for monitor pages
 _Use_decl_annotations_ static bool RwepDstPageCallback(void* va, ULONG64 pa,
                                                        void* context) {
+  NT_ASSERT(context);
+
   if (!pa) {
     HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
