@@ -62,7 +62,6 @@ _Use_decl_annotations_ NTSTATUS MmonInitialization() {
   PAGED_CODE();
 
   auto status = MmonpInitializeMmPfnDatabase();
-  HYPERPLATFORM_LOG_DEBUG("MmPfnDatabase = %p", g_mmonp_MmPfnDatabase);
   if (!NT_SUCCESS(status)) {
     return status;
   }
@@ -86,9 +85,12 @@ _Use_decl_annotations_ static NTSTATUS MmonpInitializeMmPfnDatabase() {
   }
 
   // Set appropriate patterns and based on an OS version
-  const void *pattern = nullptr;
-  SIZE_T pattern_size = 0;
-  bool hard_coded = false;
+  struct MmPfnDatabaseSearchPattern {
+    const UCHAR *bytes;
+    SIZE_T bytes_size;
+    bool hard_coded;
+  };
+  MmPfnDatabaseSearchPattern patterns[2] = {};
 
   if (IsX64()) {
     // Win 10 build 14316 is the first version implements randomized page tables
@@ -106,9 +108,9 @@ _Use_decl_annotations_ static NTSTATUS MmonpInitializeMmPfnDatabase() {
         0x48, 0x03, 0xD2,        // add     rdx, rdx
         0x48, 0xB8,              // mov     rax, 0FFFFFA8000000008h
     };
-    pattern = kPatternWin10x64;
-    pattern_size = sizeof(kPatternWin10x64);
-    hard_coded = true;
+    patterns[0].bytes = kPatternWin10x64;
+    patterns[0].bytes_size = sizeof(kPatternWin10x64);
+    patterns[0].hard_coded = true;
 
   } else {
     // x86
@@ -125,11 +127,13 @@ _Use_decl_annotations_ static NTSTATUS MmonpInitializeMmPfnDatabase() {
       };
 
       if (UtilIsX86Pae()) {
-        pattern = kPatternWin7Pae;
-        pattern_size = sizeof(kPatternWin7Pae);
+        patterns[0].bytes = kPatternWin7Pae;
+        patterns[0].bytes_size = sizeof(kPatternWin7Pae);
+        patterns[0].hard_coded = false;
       } else {
-        pattern = kPatternWin7;
-        pattern_size = sizeof(kPatternWin7);
+        patterns[0].bytes = kPatternWin7;
+        patterns[0].bytes_size = sizeof(kPatternWin7);
+        patterns[0].hard_coded = false;
       }
 
     } else if ((os_version.dwMajorVersion == 6 &&
@@ -137,12 +141,20 @@ _Use_decl_annotations_ static NTSTATUS MmonpInitializeMmPfnDatabase() {
                (os_version.dwMajorVersion == 10 &&
                 os_version.dwMinorVersion == 0)) {
       // Windows 8.1 and 10
-      static const UCHAR kPatternWin81And10[] = {
+      static const UCHAR kPatternWin81And10_0[] = {
           0xC1, 0xF8, 0x0C,  // sar     eax, 0Ch
           0xA1,              // mov     eax, ds:_MmPfnDatabase
       };
-      pattern = kPatternWin81And10;
-      pattern_size = sizeof(kPatternWin81And10);
+      static const UCHAR kPatternWin81And10_1[] = {
+          0xC1, 0xE8, 0x0C,  // shr     eax, 0Ch
+          0xA1,              // mov     eax, ds:_MmPfnDatabase
+      };
+      patterns[0].bytes = kPatternWin81And10_0;
+      patterns[0].bytes_size = sizeof(kPatternWin81And10_0);
+      patterns[0].hard_coded = false;
+      patterns[1].bytes = kPatternWin81And10_1;
+      patterns[1].bytes_size = sizeof(kPatternWin81And10_1);
+      patterns[1].hard_coded = false;
 
     } else {
       // Unknown x86 OS version
@@ -150,32 +162,47 @@ _Use_decl_annotations_ static NTSTATUS MmonpInitializeMmPfnDatabase() {
     }
   }
 
-  // Search the pattern
+  // Search the patterns from MmGetVirtualForPhysical
   const auto p_MmGetVirtualForPhysical = reinterpret_cast<UCHAR *>(
       UtilGetSystemProcAddress(L"MmGetVirtualForPhysical"));
   if (!p_MmGetVirtualForPhysical) {
     return STATUS_PROCEDURE_NOT_FOUND;
   }
-  auto found = reinterpret_cast<UCHAR *>(
-      UtilMemMem(p_MmGetVirtualForPhysical, 0x20, pattern, pattern_size));
-  if (!found) {
-    return STATUS_PROCEDURE_NOT_FOUND;
+
+  for (const auto &pattern : patterns) {
+    if (!pattern.bytes) {
+      break;  // no more patterns
+    }
+
+    auto found = reinterpret_cast<UCHAR *>(UtilMemMem(
+        p_MmGetVirtualForPhysical, 0x20, pattern.bytes, pattern.bytes_size));
+    if (!found) {
+      continue;
+    }
+
+    // Get an address of PFN database
+    found += pattern.bytes_size;
+    if (pattern.hard_coded) {
+      HYPERPLATFORM_LOG_DEBUG("Found a hard coded PFN database address at %p",
+                              found);
+      g_mmonp_MmPfnDatabase = *reinterpret_cast<void **>(found);
+    } else {
+      HYPERPLATFORM_LOG_DEBUG("Found a reference to MmPfnDatabase at %p",
+                              found);
+      const auto mmpfn_address = *reinterpret_cast<ULONG_PTR *>(found);
+      g_mmonp_MmPfnDatabase = *reinterpret_cast<void **>(mmpfn_address);
+    }
+
+    // On Windows 10 RS, a value has 0x8. Delete it.
+    g_mmonp_MmPfnDatabase = PAGE_ALIGN(g_mmonp_MmPfnDatabase);
+    break;
   }
 
-  // Get an address of PFN database
-  found += pattern_size;
-  if (hard_coded) {
-    HYPERPLATFORM_LOG_DEBUG("Found a hard coded PFN database address at %p",
-                            found);
-    g_mmonp_MmPfnDatabase = *reinterpret_cast<void **>(found);
-  } else {
-    HYPERPLATFORM_LOG_DEBUG("Found a reference to MmPfnDatabase at %p", found);
-    const auto mmpfn_address = *reinterpret_cast<ULONG_PTR *>(found);
-    g_mmonp_MmPfnDatabase = *reinterpret_cast<void **>(mmpfn_address);
+  HYPERPLATFORM_LOG_DEBUG("MmPfnDatabase = %p", g_mmonp_MmPfnDatabase);
+  if (!g_mmonp_MmPfnDatabase) {
+    return STATUS_UNSUCCESSFUL;
   }
 
-  // On Windows 10 RS, a value has 0x8. Delete it.
-  g_mmonp_MmPfnDatabase = PAGE_ALIGN(g_mmonp_MmPfnDatabase);
   return STATUS_SUCCESS;
 }
 
