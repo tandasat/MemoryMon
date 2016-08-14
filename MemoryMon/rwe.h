@@ -58,6 +58,8 @@ void RweVmcallApplyRanges(_Inout_ ProcessorData* processor_data);
 
 void RweHandleTlbFlush(_Inout_ ProcessorData* processor_data);
 
+void RweApplyRangesVmm();
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // variables

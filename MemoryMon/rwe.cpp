@@ -18,7 +18,8 @@
 #include <vector>
 #include <array>
 
-extern "C" {
+#pragma warning(disable : 4189)
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // macro utilities
@@ -60,6 +61,16 @@ class AddressRanges {
 
   void add(const AddressRange& range) {
     // ScopedLock lock(&ranges_spinlock_);
+
+    // const auto position = std::find_if(
+    //  ranges_.begin(), ranges_.end(),
+    //  [range](const auto& elem) { return (range.start_address ==
+    //  elem.start_address
+    //    && range.end_address == elem.end_address); });
+    // if (position != ranges_.end()) {
+    //  return;   // duplicated; ignore it
+    //}
+
     ranges_.push_back(range);
   }
 
@@ -120,7 +131,7 @@ class V2PMap2 {
       const auto pa_base = UtilPaFromVa(va_base);
       v2p_map_.push_back(V2PMapEntry{va_base, pa_base});
 
-      HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", va_base, pa_base);
+      // HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", va_base, pa_base);
     }
   }
 
@@ -181,6 +192,8 @@ struct RweSharedData {
   AddressRanges dst_ranges;
   V2PMap2 v2p_map;
 };
+
+extern "C" {
 
 static RweSharedData g_rwep_shared_data;
 
@@ -348,7 +361,9 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
 
     const auto guest_sp =
         reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
-    const auto return_address = *guest_sp;
+    void* return_address = nullptr;
+    RwepContextCopyMemory(&return_address, guest_sp, sizeof(void*));
+
     const auto return_base = UtilPcToFileHeader(return_address);
     const auto fault_base = UtilPcToFileHeader(fault_va);
     // TODO: IsExecutable?
@@ -373,7 +388,8 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
 
     const auto guest_sp =
         reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
-    const auto return_address = *guest_sp;
+    void* return_address = nullptr;
+    RwepContextCopyMemory(&return_address, guest_sp, sizeof(void*));
 
     // Log only when a return address is inside a source range. By this, we
     // ignore following cases:
@@ -616,8 +632,12 @@ _Use_decl_annotations_ void RweVmcallApplyRanges(
 
 _Use_decl_annotations_ void RweHandleTlbFlush(ProcessorData* processor_data) {
   if (g_rwep_shared_data.v2p_map.refresh(processor_data)) {
-    UtilForEachProcessorDpc(RwepApplyRangesDpcRoutine, nullptr);
+    RweApplyRangesVmm();
   }
+}
+
+_Use_decl_annotations_ void RweApplyRangesVmm() {
+  UtilForEachProcessorDpc(RwepApplyRangesDpcRoutine, nullptr);
 }
 
 }  // extern "C"

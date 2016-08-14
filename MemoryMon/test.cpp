@@ -59,12 +59,118 @@ _IRQL_requires_max_(PASSIVE_LEVEL) static void TestpRwe2();
 // implementations
 //
 
+#pragma warning(disable : 4505)
+
+struct RTL_PROCESS_MODULE_INFORMATION {
+  HANDLE Section;
+  PVOID MappedBase;
+  PVOID ImageBase;
+  ULONG ImageSize;
+  ULONG Flags;
+  USHORT LoadOrderIndex;
+  USHORT InitOrderIndex;
+  USHORT LoadCount;
+  USHORT OffsetToFileName;
+  UCHAR FullPathName[256];
+};
+
+static bool TestpForEachDriverCallback(
+    const RTL_PROCESS_MODULE_INFORMATION& module, void* context) {
+  PAGED_CODE();
+  UNREFERENCED_PARAMETER(context);
+
+  HYPERPLATFORM_LOG_DEBUG(
+      "%p - %p: %s", module.ImageBase,
+      reinterpret_cast<ULONG_PTR>(module.ImageBase) + module.ImageSize,
+      module.FullPathName);
+
+  const auto name = reinterpret_cast<const char*>(module.FullPathName) +
+                    module.OffsetToFileName;
+  if (strcmp(name, "storahci.sys") == 0) {
+    RweAddSrcRange(module.ImageBase, module.ImageSize);
+  }
+  return true;
+}
+
+static NTSTATUS TestpForEachDriver(
+    bool (*callback)(const RTL_PROCESS_MODULE_INFORMATION&, void*),
+    void* context) {
+  PAGED_CODE();
+
+  // For ZwQuerySystemInformation
+  enum SystemInformationClass {
+    SystemModuleInformation = 11,
+  };
+
+  NTSTATUS NTAPI ZwQuerySystemInformation(
+      _In_ SystemInformationClass SystemInformationClass,
+      _Inout_ PVOID SystemInformation, _In_ ULONG SystemInformationLength,
+      _Out_opt_ PULONG ReturnLength);
+
+  struct RTL_PROCESS_MODULES {
+    ULONG NumberOfModules;
+    RTL_PROCESS_MODULE_INFORMATION Modules[1];
+  };
+
+  // Get a necessary size of buffer
+  ULONG_PTR dummy = 0;
+  ULONG return_length = 0;
+  auto status = ZwQuerySystemInformation(SystemModuleInformation, &dummy,
+                                         sizeof(dummy), &return_length);
+  if (NT_SUCCESS(status) || return_length <= sizeof(dummy)) {
+    return status;
+  }
+
+  // Allocate s bit larger buffer to handle new processes in case
+  const ULONG allocation_size =
+      return_length + sizeof(RTL_PROCESS_MODULE_INFORMATION) * 3;
+  const auto system_info =
+      reinterpret_cast<RTL_PROCESS_MODULES*>(ExAllocatePoolWithTag(
+          PagedPool, allocation_size, kHyperPlatformCommonPoolTag));
+  if (!system_info) {
+    return STATUS_MEMORY_NOT_ALLOCATED;
+  }
+
+  status = ZwQuerySystemInformation(SystemModuleInformation, system_info,
+                                    allocation_size, &return_length);
+  if (!NT_SUCCESS(status)) {
+    ExFreePoolWithTag(system_info, kHyperPlatformCommonPoolTag);
+    return status;
+  }
+
+  // For each process
+  for (auto i = 0ul; i < system_info->NumberOfModules; ++i) {
+    const auto& module = system_info->Modules[i];
+    if (!callback(module, context)) {
+      break;
+    }
+  }
+
+  ExFreePoolWithTag(system_info, kHyperPlatformCommonPoolTag);
+  return status;
+}
+
+static NTSTATUS TestpSetSrcRangesForAllDrivers() {
+  auto status = TestpForEachDriver(TestpForEachDriverCallback, nullptr);
+  return status;
+}
+
 // Runs a set of tests for MemoryMonRWE
 _Use_decl_annotations_ void TestRwe() {
   PAGED_CODE();
 
   HYPERPLATFORM_COMMON_DBG_BREAK();
 
+  // const auto size = MAXULONG_PTR -
+  // reinterpret_cast<ULONG_PTR>(MmSystemRangeStart) + 1;
+  // RweAddSrcRange(MmSystemRangeStart, size);
+
+  TestpSetSrcRangesForAllDrivers();
+  HYPERPLATFORM_COMMON_DBG_BREAK();
+  RweApplyRanges();
+  HYPERPLATFORM_LOG_DEBUG("Enabled.");
+
+#if 0
   // Set TestpRwe1() and TestpRwe2() as source ranges. Those functions are
   // located at the page boudaries: xxxxTEST and PAGETEST sections respectively.
   // It is safe to set an entire pages as source ranges as those sections do not
@@ -109,6 +215,7 @@ _Use_decl_annotations_ void TestRwe() {
   // Test finished
   HYPERPLATFORM_COMMON_DBG_BREAK();
   ExFreePoolWithTag(pagable_test_page, kHyperPlatformCommonPoolTag);
+#endif
 }
 
 // A test function located in a non-pagable page

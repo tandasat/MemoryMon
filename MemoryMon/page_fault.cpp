@@ -26,13 +26,12 @@ extern "C" {
 
 // Locate 0xcc on a discrete section so that it cannot be affected by any src
 // or dest ranges used in tests. This code can be located on .text when we made
-// sure any test code did not affect to kPageFaultpBreakPoint. For the same
+// sure any test code did not affect to kPfpBreakPoint. For the same
 // reason, nt!DbgBreakPoint is not used at this moment.
 //
 // Note that this handler cannot be used for #PF occured in ring-3 context, as
 // the Requested Privilege Level of this code is 0, obviously.
-__declspec(allocate(".asm")) static const UCHAR kPageFaultpBreakPoint[] = {
-    0xcc};
+__declspec(allocate(".asm")) static const UCHAR kPfpBreakPoint[] = {0xcc};
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -56,9 +55,9 @@ static PageFaultRecord g_pfp_record;
 // implementations
 //
 
-// Change guest's IP to kPageFaultpBreakPoint up on #PF on kernel address space
+// Change guest's IP to kPfpBreakPoint up on #PF on kernel address space
 // so that #BP VM-exit occurs on complition of #PF handler
-_Use_decl_annotations_ bool PageFaultHanlePageFault(void* guest_ip) {
+_Use_decl_annotations_ bool PfHanlePageFault(void* guest_ip) {
   if (guest_ip < MmSystemRangeStart) {
     return false;
   }
@@ -67,15 +66,15 @@ _Use_decl_annotations_ bool PageFaultHanlePageFault(void* guest_ip) {
   }
 
   UtilVmWrite(VmcsField::kGuestRip,
-              reinterpret_cast<ULONG_PTR>(&kPageFaultpBreakPoint));
+              reinterpret_cast<ULONG_PTR>(&kPfpBreakPoint));
   g_pfp_record.push(PsGetCurrentThread(), guest_ip);
   return true;
 }
 
 // Checks whether the #BP occured up on complition of #PF handler, and so,
 // restores an original IP to continue guest execution as it should be
-_Use_decl_annotations_ bool PageFaultHandleBreakpoint(void* guest_ip) {
-  if (guest_ip != kPageFaultpBreakPoint) {
+_Use_decl_annotations_ bool PfHandleBreakpoint(void* guest_ip) {
+  if (guest_ip != kPfpBreakPoint) {
     return false;
   }
 
