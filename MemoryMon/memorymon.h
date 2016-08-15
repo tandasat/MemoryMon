@@ -34,8 +34,6 @@ _IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS MmonInitialization();
 
 _IRQL_requires_max_(PASSIVE_LEVEL) void MmonTermination();
 
-void *MmonGetPfnDatabase();
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 // variables
