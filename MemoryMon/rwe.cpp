@@ -340,6 +340,146 @@ _Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
   UtilInveptAll();
 }
 
+#include <pshpack1.h>
+typedef struct {
+  USHORT IDTLimit;
+  USHORT LowIDTbase;
+  USHORT HiIDTbase;
+} IDTINFO;
+
+typedef struct {
+  USHORT Offset;
+  USHORT Selector;
+  union {
+    USHORT Access;
+    struct {
+      UCHAR Unused;
+      UCHAR Type : 4;  // 0101(0x5) = Task Gates
+                       // 1110(0xE) = Interrupt Gates
+                       // 1111(0xF) = Trap Gates
+      UCHAR System : 1;
+      UCHAR Dpl : 2;
+      UCHAR Present : 1;
+    } AccessField;
+  };
+  USHORT ExtendedOffset;
+} IDTENTRY;
+
+/*
+1: kd> dt nt!_kIDTENTRY64
+   +0x000 OffsetLow        : Uint2B
+   +0x002 Selector         : Uint2B
+   +0x004 IstIndex         : Pos 0, 3 Bits
+   +0x004 Reserved0        : Pos 3, 5 Bits
+   +0x004 Type             : Pos 8, 5 Bits
+   +0x004 Dpl              : Pos 13, 2 Bits
+   +0x004 Present          : Pos 15, 1 Bit
+   +0x006 OffsetMiddle     : Uint2B
+   +0x008 OffsetHigh       : Uint4B
+   +0x00c Reserved1        : Uint4B
+   +0x000 Alignment        : Uint8B
+*/
+
+typedef struct {
+  USHORT OffsetLow;
+  USHORT Selector;
+  union {
+    USHORT Access;
+    struct {
+      USHORT IstIndex : 3;
+      USHORT Reserved0 : 5;
+      USHORT Type : 5;  // 0101(0x5) = Task Gates
+                        // 1110(0xE) = Interrupt Gates
+                        // 1111(0xF) = Trap Gates
+      USHORT Dpl : 2;
+      USHORT Present : 1;
+    } AccessField;
+  };
+  USHORT OffsetMiddle;
+  ULONG OffsetHigh;
+  ULONG Reserved1;
+} IDTENTRY64;
+static_assert(sizeof(IDTENTRY64) == 0x10, "Size check");
+#include <poppack.h>
+
+static void* g_handlers[0xff] = {};
+static ULONG64 g_handlers_counter[0xff] = {};
+static bool g_handlers_initialized = false;
+
+static bool RwepIsInterruptHandler(void* addr) {
+  if (!g_handlers_initialized) {
+    HYPERPLATFORM_COMMON_DBG_BREAK();
+    Idtr idtr = {};
+    __sidt(&idtr);
+
+    const auto entries = reinterpret_cast<IDTENTRY64*>(idtr.base);
+    for (auto i = 0ul; i < 0x100; ++i) {
+      const auto high = static_cast<ULONG_PTR>(entries[i].OffsetHigh) << 32;
+      const auto middle = static_cast<ULONG_PTR>(entries[i].OffsetMiddle) << 16;
+      const auto low = static_cast<ULONG_PTR>(entries[i].OffsetLow);
+      const auto handler = (high | middle | low);
+
+      g_handlers[i] = reinterpret_cast<void*>(handler);
+    }
+    g_handlers_initialized = true;
+  }
+
+  for (auto i = 0ul; i < 0x100; ++i) {
+    if (g_handlers[i] == addr) {
+      g_handlers_counter[i]++;
+      return true;
+    }
+  }
+  return false;
+}
+
+static void* RwepFindSourceAddressForExec(void* return_addr) {
+  const auto current_cr3 = __readcr3();
+  const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
+  __writecr3(guest_cr3);
+
+  UCHAR code[10] = {};
+  auto is_executable = UtilIsExecutableAddress(return_addr);
+  if (is_executable) {
+    const auto disasseble_addr =
+        reinterpret_cast<UCHAR*>(return_addr) - sizeof(code);
+    if (PAGE_ALIGN(return_addr) != PAGE_ALIGN(disasseble_addr)) {
+      is_executable = UtilIsExecutableAddress(disasseble_addr);
+    }
+    if (is_executable) {
+      RtlCopyMemory(code, disasseble_addr, sizeof(code));
+    }
+  }
+
+  __writecr3(current_cr3);
+  if (!is_executable) {
+    return nullptr;
+  }
+
+  auto offset = 0ul;
+  if (code[5] == 0xe8) {  // e8 xx xx xx xx
+    offset = sizeof(code) - 5;
+  } else if (code[8] == 0xff) {  // ff xx
+    offset = sizeof(code) - 8;
+  } else if (code[7] == 0xff) {  // ff xx xx
+    offset = sizeof(code) - 7;
+  } else if (code[6] == 0xff) {  // ff xx xx xx
+    offset = sizeof(code) - 6;
+  } else if (code[4] == 0xff) {  // ff xx xx xx xx xx
+    offset = sizeof(code) - 4;
+  } else if (code[3] == 0xff) {  // ff xx xx xx xx xx xx
+    offset = sizeof(code) - 3;
+  } else {
+    HYPERPLATFORM_COMMON_DBG_BREAK();
+  }
+
+  if (offset) {
+    return reinterpret_cast<UCHAR*>(return_addr) - offset;
+  } else {
+    return return_addr;
+  }
+}
+
 _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     ProcessorData* processor_data, void* fault_va) {
   if (RweIsInsideSrcRange(fault_va)) {
@@ -364,11 +504,26 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     void* return_address = nullptr;
     RwepContextCopyMemory(&return_address, guest_sp, sizeof(void*));
 
-    const auto return_base = UtilPcToFileHeader(return_address);
     const auto fault_base = UtilPcToFileHeader(fault_va);
-    // TODO: IsExecutable?
-    HYPERPLATFORM_LOG_INFO_SAFE("R= %p (%p), D= %p (%p), T= E", return_address,
-                                return_base, fault_va, fault_base);
+    const auto is_interrupt = RwepIsInterruptHandler(fault_va);
+    const auto src_addr = (is_interrupt)
+                              ? return_address
+                              : RwepFindSourceAddressForExec(return_address);
+
+    if (!src_addr) {
+      HYPERPLATFORM_LOG_DEBUG_SAFE(
+          "R= ---------------- (----------------), D= %p (%p), T= E", fault_va,
+          fault_base);
+    } else if (is_interrupt || src_addr != return_address) {
+      const auto src_base = UtilPcToFileHeader(src_addr);
+      HYPERPLATFORM_LOG_DEBUG_SAFE("S= %p (%p), D= %p (%p), T= E", src_addr,
+                                   src_base, fault_va, fault_base);
+    } else {
+      const auto return_base = UtilPcToFileHeader(return_address);
+      HYPERPLATFORM_LOG_DEBUG_SAFE("R= %p (%p), D= %p (%p), T= E",
+                                   return_address, return_base, fault_va,
+                                   fault_base);
+    }
 
   } else {
     // Presumably, someone is leaving a source range
@@ -397,11 +552,26 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //    - conditional and unconditional jump from a source range to other
     //    range
     if (RweIsInsideSrcRange(return_address)) {
-      const auto return_base = UtilPcToFileHeader(return_address);
       const auto fault_base = UtilPcToFileHeader(fault_va);
-      HYPERPLATFORM_LOG_INFO_SAFE("R= %p (%p), D= %p (%p), T= E",
-                                  return_address, return_base, fault_va,
-                                  fault_base);
+      const auto is_interrupt = RwepIsInterruptHandler(fault_va);
+      const auto src_addr = (is_interrupt)
+                                ? return_address
+                                : RwepFindSourceAddressForExec(return_address);
+
+      if (!src_addr) {
+        HYPERPLATFORM_LOG_DEBUG_SAFE(
+            "R= ---------------- (----------------), D= %p (%p), T= E",
+            fault_va, fault_base);
+      } else if (is_interrupt || src_addr != return_address) {
+        const auto src_base = UtilPcToFileHeader(src_addr);
+        HYPERPLATFORM_LOG_INFO_SAFE("S= %p (%p), D= %p (%p), T= E", src_addr,
+                                    src_base, fault_va, fault_base);
+      } else {
+        const auto return_base = UtilPcToFileHeader(return_address);
+        HYPERPLATFORM_LOG_INFO_SAFE("R= %p (%p), D= %p (%p), T= E",
+                                    return_address, return_base, fault_va,
+                                    fault_base);
+      }
     }
   }
 }

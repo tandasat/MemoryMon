@@ -161,14 +161,12 @@ _Use_decl_annotations_ void TestRwe() {
 
   HYPERPLATFORM_COMMON_DBG_BREAK();
 
-  // const auto size = MAXULONG_PTR -
-  // reinterpret_cast<ULONG_PTR>(MmSystemRangeStart) + 1;
-  // RweAddSrcRange(MmSystemRangeStart, size);
-
+#if 1
   TestpSetSrcRangesForAllDrivers();
   HYPERPLATFORM_COMMON_DBG_BREAK();
   RweApplyRanges();
   HYPERPLATFORM_LOG_DEBUG("Enabled.");
+#endif
 
 #if 0
   // Set TestpRwe1() and TestpRwe2() as source ranges. Those functions are
