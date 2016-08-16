@@ -150,11 +150,6 @@ static NTSTATUS TestpForEachDriver(
   return status;
 }
 
-static NTSTATUS TestpSetSrcRangesForAllDrivers() {
-  auto status = TestpForEachDriver(TestpForEachDriverCallback, nullptr);
-  return status;
-}
-
 // Runs a set of tests for MemoryMonRWE
 _Use_decl_annotations_ void TestRwe() {
   PAGED_CODE();
@@ -162,7 +157,7 @@ _Use_decl_annotations_ void TestRwe() {
   HYPERPLATFORM_COMMON_DBG_BREAK();
 
 #if 1
-  TestpSetSrcRangesForAllDrivers();
+  TestpForEachDriver(TestpForEachDriverCallback, nullptr);
   HYPERPLATFORM_COMMON_DBG_BREAK();
   RweApplyRanges();
   HYPERPLATFORM_LOG_DEBUG("Enabled.");

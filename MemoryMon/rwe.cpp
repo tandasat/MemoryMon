@@ -14,6 +14,10 @@
 #include "../HyperPlatform/HyperPlatform/util.h"
 #include "../HyperPlatform/HyperPlatform/ept.h"
 #include "../HyperPlatform/HyperPlatform/vmm.h"
+#ifndef HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
+#define HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER 1
+#endif  // HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
+#include "../HyperPlatform/HyperPlatform/performance.h"
 #include "../HyperPlatform/HyperPlatform/kernel_stl.h"
 #include <vector>
 #include <array>
@@ -424,6 +428,8 @@ static bool RwepIsInterruptHandler(void* addr) {
     g_handlers_initialized = true;
   }
 
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
+
   for (auto i = 0ul; i < 0x100; ++i) {
     if (g_handlers[i] == addr) {
       g_handlers_counter[i]++;
@@ -434,6 +440,8 @@ static bool RwepIsInterruptHandler(void* addr) {
 }
 
 static void* RwepFindSourceAddressForExec(void* return_addr) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
+
   const auto current_cr3 = __readcr3();
   const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
   __writecr3(guest_cr3);
@@ -470,7 +478,7 @@ static void* RwepFindSourceAddressForExec(void* return_addr) {
   } else if (code[3] == 0xff) {  // ff xx xx xx xx xx xx
     offset = sizeof(code) - 3;
   } else {
-    HYPERPLATFORM_COMMON_DBG_BREAK();
+    return nullptr;
   }
 
   if (offset) {
