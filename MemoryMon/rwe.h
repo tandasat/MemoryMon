@@ -9,6 +9,7 @@
 #define MEMORYMON_RWE_H_
 
 #include <fltKernel.h>
+#include "../HyperPlatform/HyperPlatform/ia32_type.h"
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -36,29 +37,38 @@ struct RweData;
 //
 
 _IRQL_requires_max_(PASSIVE_LEVEL) RweData* RweAllocData();
+
 _IRQL_requires_max_(PASSIVE_LEVEL) void RweFreeData(_In_ RweData* rwe_data);
 
 void RweAddSrcRange(_In_ void* address, _In_ SIZE_T size);
+
 void RweAddDstRange(_In_ void* address, _In_ SIZE_T size);
+
 bool RweIsInsideSrcRange(_In_ void* address);
+
 bool RweIsInsideDstRange(_In_ void* address);
 
 _IRQL_requires_max_(PASSIVE_LEVEL) void RweSetDefaultEptAttributes(
     _Inout_ ProcessorData* processor_data);
+
 _IRQL_requires_max_(PASSIVE_LEVEL) void RweApplyRanges();
 
-void RweHandleEptViolation(_Inout_ ProcessorData* processor_data,
-                           _In_ void* guest_ip, _In_ void* fault_va,
-                           _In_ bool read_violation, _In_ bool write_violation,
-                           _In_ bool execute_violation);
+_IRQL_requires_min_(DISPATCH_LEVEL) void RweHandleNewDeviceMemoryAccess(
+    _In_ ULONG64 pa, _In_ void* va);
 
-void RweHandleMonitorTrapFlag(_Inout_ ProcessorData* processor_data);
+_IRQL_requires_min_(DISPATCH_LEVEL) void RweHandleEptViolation(
+    _Inout_ ProcessorData* processor_data, _In_ void* guest_ip,
+    _In_ void* fault_va, _In_ bool read_violation, _In_ bool write_violation,
+    _In_ bool execute_violation);
 
-void RweVmcallApplyRanges(_Inout_ ProcessorData* processor_data);
+_IRQL_requires_min_(DISPATCH_LEVEL) void RweHandleMonitorTrapFlag(
+    _Inout_ ProcessorData* processor_data, _In_ GpRegisters* gp_regs);
 
-void RweHandleTlbFlush(_Inout_ ProcessorData* processor_data);
+_IRQL_requires_min_(DISPATCH_LEVEL) void RweVmcallApplyRanges(
+    _Inout_ ProcessorData* processor_data);
 
-void RweApplyRangesVmm();
+_IRQL_requires_min_(DISPATCH_LEVEL) void RweHandleTlbFlush(
+    _Inout_ ProcessorData* processor_data);
 
 ////////////////////////////////////////////////////////////////////////////////
 //

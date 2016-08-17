@@ -6,7 +6,6 @@
 /// Implements RWE functions.
 
 #include "rwe.h"
-#include "scoped_lock.h"
 #define NTSTRSAFE_NO_CB_FUNCTIONS
 #include <ntstrsafe.h>
 #include "../HyperPlatform/HyperPlatform/common.h"
@@ -14,16 +13,19 @@
 #include "../HyperPlatform/HyperPlatform/util.h"
 #include "../HyperPlatform/HyperPlatform/ept.h"
 #include "../HyperPlatform/HyperPlatform/vmm.h"
-#ifndef HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
-#define HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER 1
-#endif  // HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
-#include "../HyperPlatform/HyperPlatform/performance.h"
-#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
-#include <vector>
+#include "V2PMap.h"
+#include "AddressRanges.h"
 #include <array>
+#include <capstone.h>
 
-#pragma warning(disable : 4189)
+// unreferenced local function has been removed
+#pragma warning(disable : 4505)
 
+#if !defined(_AMD64_)
+#error This project does not support x86 yet.
+#endif
+
+extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
 //
 // macro utilities
@@ -43,11 +45,6 @@ static const auto kRwepNumOfMonitoredBytesForWrite = 16;
 // types
 //
 
-struct AddressRange {
-  void* start_address;  // inclusive
-  void* end_address;    // inclusive
-};
-
 struct RweLastData {
   bool is_write;
   void* guest_ip;
@@ -57,134 +54,6 @@ struct RweLastData {
 
   RweLastData()
       : is_write(false), guest_ip(0), fault_va(0), ept_entry(nullptr) {}
-};
-
-class AddressRanges {
- public:
-  AddressRanges() { KeInitializeSpinLock(&ranges_spinlock_); }
-
-  void add(const AddressRange& range) {
-    // ScopedLock lock(&ranges_spinlock_);
-
-    // const auto position = std::find_if(
-    //  ranges_.begin(), ranges_.end(),
-    //  [range](const auto& elem) { return (range.start_address ==
-    //  elem.start_address
-    //    && range.end_address == elem.end_address); });
-    // if (position != ranges_.end()) {
-    //  return;   // duplicated; ignore it
-    //}
-
-    ranges_.push_back(range);
-  }
-
-  bool is_in_range(void* address) const {
-    // ScopedLock lock(&ranges_spinlock_);
-
-    bool inside = false;
-    for (const auto& range : ranges_) {
-      if (UtilIsInBounds(address, range.start_address, range.end_address)) {
-        inside = true;
-        break;
-      }
-    }
-    return inside;
-  }
-
-  using ForEachCallback = bool (*)(_In_ void* va, _In_ ULONG64 pa,
-                                   _In_opt_ void* context);
-
-  void for_each_page(ForEachCallback callback, void* context) {
-    // ScopedLock lock(&ranges_spinlock_);
-
-    for (const auto& range : ranges_) {
-      const auto start_address =
-          reinterpret_cast<ULONG_PTR>(range.start_address);
-      const auto end_address = reinterpret_cast<ULONG_PTR>(range.end_address);
-      const auto num_of_pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-          start_address, end_address - start_address + 1);
-      for (auto page_index = 0ul; page_index < num_of_pages; ++page_index) {
-        const auto va =
-            reinterpret_cast<void*>(start_address + PAGE_SIZE * page_index);
-        const auto pa = UtilPaFromVa(va);
-        if (!callback(va, pa, context)) {
-          break;
-        }
-      }
-    }
-  }
-
- private:
-  std::vector<AddressRange> ranges_;
-  mutable KSPIN_LOCK ranges_spinlock_;
-};
-
-class V2PMap2 {
- public:
-  V2PMap2() { KeInitializeSpinLock(&v2p_map_spinlock_); }
-
-  void add(const AddressRange& range) {
-    // ScopedLock lock(&v2p_map_spinlock_);
-    const auto start_address = reinterpret_cast<ULONG_PTR>(range.start_address);
-    const auto end_address = reinterpret_cast<ULONG_PTR>(range.end_address);
-
-    const auto pages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-        start_address, end_address - start_address + 1);
-    for (auto page_index = 0ul; page_index < pages; ++page_index) {
-      const auto va_base = PAGE_ALIGN(start_address + PAGE_SIZE * page_index);
-      const auto pa_base = UtilPaFromVa(va_base);
-      v2p_map_.push_back(V2PMapEntry{va_base, pa_base});
-
-      // HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", va_base, pa_base);
-    }
-  }
-
-  bool refresh(ProcessorData* processor_data) {
-    // ScopedLock lock(&v2p_map_spinlock_);
-
-    bool need_refresh = false;
-    for (auto& map : v2p_map_) {
-      NT_ASSERT(map.va == PAGE_ALIGN(map.va));
-      NT_ASSERT(map.pa == reinterpret_cast<ULONG64>(PAGE_ALIGN(map.pa)));
-      const auto new_pa = UtilPaFromVa(map.va);
-      if (new_pa == map.pa) {
-        continue;
-      }
-
-      if (map.pa) {
-        const auto old_ept_entry_n =
-            EptGetEptPtEntry(processor_data->ept_data_normal, map.pa);
-        const auto old_ept_entry_m =
-            EptGetEptPtEntry(processor_data->ept_data_monitor, map.pa);
-        NT_ASSERT(old_ept_entry_n && old_ept_entry_n->all);
-        NT_ASSERT(old_ept_entry_m && old_ept_entry_m->all);
-
-        old_ept_entry_n->fields.execute_access = true;
-        old_ept_entry_n->fields.read_access = true;
-        old_ept_entry_n->fields.write_access = true;
-
-        // monitor pages are not executable by default
-        old_ept_entry_m->fields.execute_access = false;
-        old_ept_entry_m->fields.read_access = true;
-        old_ept_entry_m->fields.write_access = true;
-      }
-
-      HYPERPLATFORM_LOG_DEBUG_SAFE("Map: V:%p P:%p => %p", map.va, map.pa,
-                                   new_pa);
-      map.pa = new_pa;
-      need_refresh = true;
-    }
-    return need_refresh;
-  }
-
- private:
-  struct V2PMapEntry {
-    void* va;
-    ULONG64 pa;
-  };
-
-  std::vector<V2PMapEntry> v2p_map_;
-  mutable KSPIN_LOCK v2p_map_spinlock_;
 };
 
 struct RweData {
@@ -197,9 +66,27 @@ struct RweSharedData {
   V2PMap2 v2p_map;
 };
 
-extern "C" {
-
-static RweSharedData g_rwep_shared_data;
+// dt nt!_kIDTENTRY64
+struct IDTENTRY64 {
+  USHORT OffsetLow;
+  USHORT Selector;
+  union {
+    USHORT Access;
+    struct {
+      USHORT IstIndex : 3;
+      USHORT Reserved0 : 5;
+      USHORT Type : 5;  // 0101(0x5) = Task Gates
+                        // 1110(0xE) = Interrupt Gates
+                        // 1111(0xF) = Trap Gates
+      USHORT Dpl : 2;
+      USHORT Present : 1;
+    } AccessField;
+  };
+  USHORT OffsetMiddle;
+  ULONG OffsetHigh;
+  ULONG Reserved1;
+};
+static_assert(sizeof(IDTENTRY64) == 0x10, "Size check");
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -207,6 +94,34 @@ static RweSharedData g_rwep_shared_data;
 //
 
 static KDEFERRED_ROUTINE RwepApplyRangesDpcRoutine;
+
+static void RweSwtichToNormalMode(_Inout_ ProcessorData* processor_data);
+static void RwepSwitchToMonitoringMode(_Inout_ ProcessorData* processor_data);
+static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
+                                       _In_ void* fault_va);
+static void RewpSetMonitorTrapFlag(_In_ bool enable);
+static void RewpSetReadWriteOnPage(_In_ bool allow_read_write,
+                                   _Out_ EptCommonEntry* ept_entry);
+static void* RwepContextCopyMemory(_Out_ void* destination,
+                                   _In_ const void* source, _In_ SIZE_T length);
+static void RewpHandleReadWriteViolation(_Inout_ ProcessorData* processor_data,
+                                         _In_ void* guest_ip,
+                                         _In_ void* fault_va,
+                                         _In_ bool is_write);
+static NTSTATUS RwepBytesToString(_Out_ char* buffer, _In_ SIZE_T buffer_size,
+                                  _In_ const UCHAR* bytes,
+                                  _In_ SIZE_T bytes_size);
+
+static bool RwepSrcPageCallback(_In_ void* va, _In_ ULONG64 pa,
+                                _In_opt_ void* context);
+
+static bool RwepDstPageCallback(_In_ void* va, _In_ ULONG64 pa,
+                                _In_opt_ void* context);
+
+static void* RwepFindSourceAddressForExec(_In_ void* return_addr);
+
+static bool RwepGetValueFromRegister(_Inout_ GpRegisters* gp_regs,
+                                     _In_ x86_reg reg, _Out_ ULONG64* value);
 
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, RweAllocData)
@@ -219,6 +134,45 @@ static KDEFERRED_ROUTINE RwepApplyRangesDpcRoutine;
 //
 // variables
 //
+
+static RweSharedData g_rwep_shared_data;
+
+struct InterruptHandlers {
+  struct InterruptHandlerEntry {
+    void* handler;
+    volatile LONG64 hit_counter;
+  };
+
+  std::array<InterruptHandlerEntry, 0xff> handlers;
+
+  InterruptHandlers() {
+    Idtr idtr = {};
+    __sidt(&idtr);
+
+    const auto entries = reinterpret_cast<IDTENTRY64*>(idtr.base);
+    NT_ASSERT(entries);
+
+    for (auto i = 0ul; i < handlers.size(); ++i) {
+      const auto high = static_cast<ULONG_PTR>(entries[i].OffsetHigh) << 32;
+      const auto middle = static_cast<ULONG_PTR>(entries[i].OffsetMiddle) << 16;
+      const auto low = static_cast<ULONG_PTR>(entries[i].OffsetLow);
+      const auto handler = (high | middle | low);
+
+      handlers[i].handler = reinterpret_cast<void*>(handler);
+    }
+  }
+
+  bool has(void* addr) {
+    for (auto& handler : handlers) {
+      if (handler.handler == addr) {
+        InterlockedIncrement64(&handler.hit_counter);
+        return true;
+      }
+    }
+    return false;
+  }
+};
+static InterruptHandlers g_rewp_int_handlers;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -236,23 +190,19 @@ _Use_decl_annotations_ void RweFreeData(RweData* rwe_data) {
 }
 
 _Use_decl_annotations_ void RweAddSrcRange(void* address, SIZE_T size) {
-  AddressRange range = {
-      address,
-      reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1)};
-  HYPERPLATFORM_LOG_DEBUG_SAFE("Add SRC range: %p - %p", range.start_address,
-                               range.end_address);
-  g_rwep_shared_data.src_ranges.add(range);
-  g_rwep_shared_data.v2p_map.add(range);
+  const auto end_address =
+      reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1);
+  HYPERPLATFORM_LOG_DEBUG_SAFE("Add SRC range: %p - %p", address, end_address);
+  g_rwep_shared_data.src_ranges.add(address, size);
+  g_rwep_shared_data.v2p_map.add(address, size);
 }
 
 _Use_decl_annotations_ void RweAddDstRange(void* address, SIZE_T size) {
-  AddressRange range = {
-      address,
-      reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1)};
-  HYPERPLATFORM_LOG_DEBUG_SAFE("Add DST range: %p - %p", range.start_address,
-                               range.end_address);
-  g_rwep_shared_data.dst_ranges.add(range);
-  g_rwep_shared_data.v2p_map.add(range);
+  const auto end_address =
+      reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1);
+  HYPERPLATFORM_LOG_DEBUG_SAFE("Add DST range: %p - %p", address, end_address);
+  g_rwep_shared_data.dst_ranges.add(address, size);
+  g_rwep_shared_data.v2p_map.add(address, size);
 }
 
 _Use_decl_annotations_ bool RweIsInsideSrcRange(void* address) {
@@ -295,6 +245,16 @@ _Use_decl_annotations_ void RweApplyRanges() {
       nullptr);
 }
 
+// Set a va associated with 0xfd5fa000 as a dest range
+_Use_decl_annotations_ void RweHandleNewDeviceMemoryAccess(ULONG64 pa,
+                                                           void* va) {
+#if defined(MEMORYMON_ENABLE_MMIO_TRACE)
+  if (reinterpret_cast<ULONG64>(PAGE_ALIGN(pa)) == 0xfd5fa000) {
+    RweAddDstRange(PAGE_ALIGN(va), PAGE_SIZE);
+  }
+#endif
+}
+
 _Use_decl_annotations_ static void RwepApplyRangesDpcRoutine(
     _KDPC* dpc, PVOID deferred_context, PVOID system_argument1,
     PVOID system_argument2) {
@@ -305,26 +265,6 @@ _Use_decl_annotations_ static void RwepApplyRangesDpcRoutine(
   UtilVmCall(HypercallNumber::kRweApplyRanges, nullptr);
   ExFreePoolWithTag(dpc, kHyperPlatformCommonPoolTag);
 }
-
-//
-// VMM code
-//
-static void RweSwtichToNormalMode(_Inout_ ProcessorData* processor_data);
-static void RwepSwitchToMonitoringMode(_Inout_ ProcessorData* processor_data);
-static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
-                                       _In_ void* fault_va);
-static void RewpSetMonitorTrapFlag(_In_ bool enable);
-static void RewpSetReadWriteOnPage(_In_ bool allow_read_write,
-                                   _Out_ EptCommonEntry* ept_entry);
-static void* RwepContextCopyMemory(_Out_ void* destination,
-                                   _In_ const void* source, _In_ SIZE_T length);
-static void RewpHandleReadWriteViolation(_Inout_ ProcessorData* processor_data,
-                                         _In_ void* guest_ip,
-                                         _In_ void* fault_va,
-                                         _In_ bool is_write);
-static NTSTATUS RwepBytesToString(_Out_ char* buffer, _In_ SIZE_T buffer_size,
-                                  _In_ const UCHAR* bytes,
-                                  _In_ SIZE_T bytes_size);
 
 _Use_decl_annotations_ static void RweSwtichToNormalMode(
     ProcessorData* processor_data) {
@@ -344,104 +284,8 @@ _Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
   UtilInveptAll();
 }
 
-#include <pshpack1.h>
-typedef struct {
-  USHORT IDTLimit;
-  USHORT LowIDTbase;
-  USHORT HiIDTbase;
-} IDTINFO;
-
-typedef struct {
-  USHORT Offset;
-  USHORT Selector;
-  union {
-    USHORT Access;
-    struct {
-      UCHAR Unused;
-      UCHAR Type : 4;  // 0101(0x5) = Task Gates
-                       // 1110(0xE) = Interrupt Gates
-                       // 1111(0xF) = Trap Gates
-      UCHAR System : 1;
-      UCHAR Dpl : 2;
-      UCHAR Present : 1;
-    } AccessField;
-  };
-  USHORT ExtendedOffset;
-} IDTENTRY;
-
-/*
-1: kd> dt nt!_kIDTENTRY64
-   +0x000 OffsetLow        : Uint2B
-   +0x002 Selector         : Uint2B
-   +0x004 IstIndex         : Pos 0, 3 Bits
-   +0x004 Reserved0        : Pos 3, 5 Bits
-   +0x004 Type             : Pos 8, 5 Bits
-   +0x004 Dpl              : Pos 13, 2 Bits
-   +0x004 Present          : Pos 15, 1 Bit
-   +0x006 OffsetMiddle     : Uint2B
-   +0x008 OffsetHigh       : Uint4B
-   +0x00c Reserved1        : Uint4B
-   +0x000 Alignment        : Uint8B
-*/
-
-typedef struct {
-  USHORT OffsetLow;
-  USHORT Selector;
-  union {
-    USHORT Access;
-    struct {
-      USHORT IstIndex : 3;
-      USHORT Reserved0 : 5;
-      USHORT Type : 5;  // 0101(0x5) = Task Gates
-                        // 1110(0xE) = Interrupt Gates
-                        // 1111(0xF) = Trap Gates
-      USHORT Dpl : 2;
-      USHORT Present : 1;
-    } AccessField;
-  };
-  USHORT OffsetMiddle;
-  ULONG OffsetHigh;
-  ULONG Reserved1;
-} IDTENTRY64;
-static_assert(sizeof(IDTENTRY64) == 0x10, "Size check");
-#include <poppack.h>
-
-static void* g_handlers[0xff] = {};
-static ULONG64 g_handlers_counter[0xff] = {};
-static bool g_handlers_initialized = false;
-
-static bool RwepIsInterruptHandler(void* addr) {
-  if (!g_handlers_initialized) {
-    HYPERPLATFORM_COMMON_DBG_BREAK();
-    Idtr idtr = {};
-    __sidt(&idtr);
-
-    const auto entries = reinterpret_cast<IDTENTRY64*>(idtr.base);
-    for (auto i = 0ul; i < 0x100; ++i) {
-      const auto high = static_cast<ULONG_PTR>(entries[i].OffsetHigh) << 32;
-      const auto middle = static_cast<ULONG_PTR>(entries[i].OffsetMiddle) << 16;
-      const auto low = static_cast<ULONG_PTR>(entries[i].OffsetLow);
-      const auto handler = (high | middle | low);
-
-      g_handlers[i] = reinterpret_cast<void*>(handler);
-    }
-    g_handlers_initialized = true;
-  }
-
-  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
-
-  for (auto i = 0ul; i < 0x100; ++i) {
-    if (g_handlers[i] == addr) {
-      g_handlers_counter[i]++;
-      return true;
-    }
-  }
-  return false;
-}
-
-static void* RwepFindSourceAddressForExec(void* return_addr) {
-  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
-
+_Use_decl_annotations_ static void* RwepFindSourceAddressForExec(
+    void* return_addr) {
   const auto current_cr3 = __readcr3();
   const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
   __writecr3(guest_cr3);
@@ -507,13 +351,14 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //  Oth   x   o
     RwepSwitchToMonitoringMode(processor_data);
 
+#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
     const auto guest_sp =
         reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
     void* return_address = nullptr;
     RwepContextCopyMemory(&return_address, guest_sp, sizeof(void*));
 
     const auto fault_base = UtilPcToFileHeader(fault_va);
-    const auto is_interrupt = RwepIsInterruptHandler(fault_va);
+    const auto is_interrupt = g_rewp_int_handlers.has(fault_va);
     const auto src_addr = (is_interrupt)
                               ? return_address
                               : RwepFindSourceAddressForExec(return_address);
@@ -532,6 +377,7 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
                                    return_address, return_base, fault_va,
                                    fault_base);
     }
+#endif  // !defined(MEMORYMON_ENABLE_MMIO_TRACE)
 
   } else {
     // Presumably, someone is leaving a source range
@@ -549,6 +395,7 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //  Oth   o   o
     RweSwtichToNormalMode(processor_data);
 
+#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
     const auto guest_sp =
         reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
     void* return_address = nullptr;
@@ -561,7 +408,7 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //    range
     if (RweIsInsideSrcRange(return_address)) {
       const auto fault_base = UtilPcToFileHeader(fault_va);
-      const auto is_interrupt = RwepIsInterruptHandler(fault_va);
+      const auto is_interrupt = g_rewp_int_handlers.has(fault_va);
       const auto src_addr = (is_interrupt)
                                 ? return_address
                                 : RwepFindSourceAddressForExec(return_address);
@@ -581,6 +428,7 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
                                     fault_base);
       }
     }
+#endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE)
   }
 }
 
@@ -644,10 +492,12 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   processor_data->rwe_data->last_data.fault_va = fault_va;
   processor_data->rwe_data->last_data.ept_entry = ept_entry;
   if (is_write) {
+#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
     RwepContextCopyMemory(
         processor_data->rwe_data->last_data.old_bytes.data(),
         reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(fault_va) & ~0xf),
         processor_data->rwe_data->last_data.old_bytes.size());
+#endif
   } else {
     processor_data->rwe_data->last_data.old_bytes.fill(0);
   }
@@ -685,8 +535,168 @@ _Use_decl_annotations_ static NTSTATUS RwepBytesToString(char* buffer,
   return STATUS_SUCCESS;
 }
 
+_Use_decl_annotations_ static bool RwepGetValueFromRegister(
+    GpRegisters* gp_regs, x86_reg reg, ULONG64* value) {
+  // Covers registers that are likely to be used. It is not comprehensive and
+  // does not includes all possible registers.
+  ULONG64 val = 0;
+  switch (reg) {
+    // clang-format off
+  case X86_REG_AL:  val = gp_regs->ax & UINT8_MAX; break;
+  case X86_REG_AH:  val = (gp_regs->ax >> 8) & UINT8_MAX; break;
+  case X86_REG_AX:  val = gp_regs->ax & UINT16_MAX; break;
+  case X86_REG_EAX: val = gp_regs->ax & UINT32_MAX; break;
+  case X86_REG_RAX: val = gp_regs->ax; break;
+
+  case X86_REG_BL:  val = gp_regs->bx & UINT8_MAX; break;
+  case X86_REG_BH:  val = (gp_regs->bx >> 8) & UINT8_MAX; break;
+  case X86_REG_BX:  val = gp_regs->bx & UINT16_MAX; break;
+  case X86_REG_EBX: val = gp_regs->bx & UINT32_MAX; break;
+  case X86_REG_RBX: val = gp_regs->bx; break;
+
+  case X86_REG_CL:  val = gp_regs->cx & UINT8_MAX; break;
+  case X86_REG_CH:  val = (gp_regs->cx >> 8) & UINT8_MAX; break;
+  case X86_REG_CX:  val = gp_regs->cx & UINT16_MAX; break;
+  case X86_REG_ECX: val = gp_regs->cx & UINT32_MAX; break;
+  case X86_REG_RCX: val = gp_regs->cx; break;
+
+  case X86_REG_DL:  val = gp_regs->dx & UINT8_MAX; break;
+  case X86_REG_DH:  val = (gp_regs->dx >> 8) & UINT8_MAX; break;
+  case X86_REG_DX:  val = gp_regs->dx & UINT16_MAX; break;
+  case X86_REG_EDX: val = gp_regs->dx & UINT32_MAX; break;
+  case X86_REG_RDX: val = gp_regs->dx; break;
+
+  case X86_REG_DIL: val = gp_regs->di & UINT8_MAX; break;
+  case X86_REG_DI:  val = gp_regs->di & UINT16_MAX; break;
+  case X86_REG_EDI: val = gp_regs->di & UINT32_MAX; break;
+  case X86_REG_RDI: val = gp_regs->di; break;
+
+  case X86_REG_SIL: val = gp_regs->si & UINT8_MAX; break;
+  case X86_REG_SI:  val = gp_regs->si & UINT16_MAX; break;
+  case X86_REG_ESI: val = gp_regs->si & UINT32_MAX; break;
+  case X86_REG_RSI: val = gp_regs->si; break;
+
+  case X86_REG_R8B: val = gp_regs->r8 & UINT8_MAX; break;
+  case X86_REG_R8W: val = gp_regs->r8 & UINT16_MAX; break;
+  case X86_REG_R8D: val = gp_regs->r8 & UINT32_MAX; break;
+  case X86_REG_R8:  val = gp_regs->r8; break;
+
+  case X86_REG_R9B: val = gp_regs->r9 & UINT8_MAX; break;
+  case X86_REG_R9W: val = gp_regs->r9 & UINT16_MAX; break;
+  case X86_REG_R9D: val = gp_regs->r9 & UINT32_MAX; break;
+  case X86_REG_R9:  val = gp_regs->r9; break;
+
+  case X86_REG_R10B: val = gp_regs->r10 & UINT8_MAX; break;
+  case X86_REG_R10W: val = gp_regs->r10 & UINT16_MAX; break;
+  case X86_REG_R10D: val = gp_regs->r10 & UINT32_MAX; break;
+  case X86_REG_R10:  val = gp_regs->r10; break;
+
+  case X86_REG_R11B: val = gp_regs->r11 & UINT8_MAX; break;
+  case X86_REG_R11W: val = gp_regs->r11 & UINT16_MAX; break;
+  case X86_REG_R11D: val = gp_regs->r11 & UINT32_MAX; break;
+  case X86_REG_R11:  val = gp_regs->r11; break;
+
+  case X86_REG_R12B: val = gp_regs->r12 & UINT8_MAX; break;
+  case X86_REG_R12W: val = gp_regs->r12 & UINT16_MAX; break;
+  case X86_REG_R12D: val = gp_regs->r12 & UINT32_MAX; break;
+  case X86_REG_R12:  val = gp_regs->r12; break;
+
+  case X86_REG_R13B: val = gp_regs->r13 & UINT8_MAX; break;
+  case X86_REG_R13W: val = gp_regs->r13 & UINT16_MAX; break;
+  case X86_REG_R13D: val = gp_regs->r13 & UINT32_MAX; break;
+  case X86_REG_R13:  val = gp_regs->r13; break;
+
+  case X86_REG_R14B: val = gp_regs->r14 & UINT8_MAX; break;
+  case X86_REG_R14W: val = gp_regs->r14 & UINT16_MAX; break;
+  case X86_REG_R14D: val = gp_regs->r14 & UINT32_MAX; break;
+  case X86_REG_R14:  val = gp_regs->r14; break;
+
+  case X86_REG_R15B: val = gp_regs->r15 & UINT8_MAX; break;
+  case X86_REG_R15W: val = gp_regs->r15 & UINT16_MAX; break;
+  case X86_REG_R15D: val = gp_regs->r15 & UINT32_MAX; break;
+  case X86_REG_R15:  val = gp_regs->r15; break;
+    // clang-format on
+
+    default:
+      return false;
+  }
+
+  *value = val;
+  return true;
+}
+
+_Use_decl_annotations_ static bool RwepGetWriteValue(void* address,
+                                                     GpRegisters* gp_regs,
+                                                     ULONG64* value,
+                                                     SIZE_T* size) {
+  bool result = false;
+
+  // NT_ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+  csh handle = {};
+  if (cs_open(CS_ARCH_X86, (sizeof(void*) == 4) ? CS_MODE_32 : CS_MODE_64,
+              &handle) != CS_ERR_OK) {
+    return result;
+  }
+
+  if (cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK) {
+    cs_close(&handle);
+    return result;
+  }
+
+  const auto current_cr3 = __readcr3();
+  const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
+  __writecr3(guest_cr3);
+
+  cs_insn* insn = {};
+  auto count =
+      cs_disasm(handle, (uint8_t*)address, 15, (uint64_t)address, 0, &insn);
+
+  __writecr3(current_cr3);
+  if (count == 0) {
+    cs_close(&handle);
+    return result;
+  }
+
+  const auto& inst = insn[0];
+  HYPERPLATFORM_LOG_INFO_SAFE("%s %s", inst.mnemonic, inst.op_str);
+
+  switch (inst.id) {
+    case X86_INS_MOV:
+    case X86_INS_STOSB:
+    case X86_INS_STOSD:
+    case X86_INS_STOSQ:
+    case X86_INS_STOSW:
+      break;
+    default:
+      goto exit;
+  }
+
+  if (inst.detail->x86.op_count != 2) {
+    goto exit;
+  }
+
+  const auto& second_operand = inst.detail->x86.operands[1];
+  if (second_operand.type == X86_OP_REG &&
+      RwepGetValueFromRegister(gp_regs, second_operand.reg, value)) {
+    *size = second_operand.size;
+  } else if (second_operand.type == X86_OP_IMM) {
+    *value = second_operand.imm;
+    *size = second_operand.size;
+  } else {
+    goto exit;
+  }
+
+  result = true;
+
+exit:;
+  cs_free(insn, count);
+  cs_close(&handle);
+  return result;
+}
+
 _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
-    ProcessorData* processor_data) {
+    ProcessorData* processor_data, GpRegisters* gp_regs) {
   NT_ASSERT(processor_data->rwe_data->last_data.ept_entry);
 
   // Revert to
@@ -706,6 +716,7 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
       UtilPcToFileHeader(processor_data->rwe_data->last_data.fault_va);
 
   if (processor_data->rwe_data->last_data.is_write) {
+#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
     static const auto kBinaryStringSize =
         kRwepNumOfMonitoredBytesForWrite * 3 + 1;
 
@@ -731,6 +742,31 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
         processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
         processor_data->rwe_data->last_data.fault_va, fault_va_base,
         old_bytes_string, new_bytes_string);
+#else
+    HYPERPLATFORM_LOG_INFO_SAFE(
+        "S= %p (%p), D= %p (%p), T= W",
+        processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
+        processor_data->rwe_data->last_data.fault_va, fault_va_base);
+#endif
+
+#if defined(MEMORYMON_ENABLE_MMIO_TRACE)
+    ULONG64 value = 0;
+    SIZE_T size = 0;
+    if (RwepGetWriteValue(processor_data->rwe_data->last_data.guest_ip, gp_regs,
+                          &value, &size)) {
+      // clang-format off
+      switch (size) {
+      case 1: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %02x", value & UINT8_MAX); break;
+      case 2: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %04x", value & UINT16_MAX); break;
+      case 4: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %08x", value & UINT32_MAX); break;
+      case 8: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %016llx", value); break;
+      default: HYPERPLATFORM_COMMON_DBG_BREAK(); break;
+      }
+      // clang-format on
+    } else {
+      HYPERPLATFORM_COMMON_DBG_BREAK();
+    }
+#endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE)
 
   } else {
     HYPERPLATFORM_LOG_INFO_SAFE(
@@ -744,11 +780,6 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
   processor_data->rwe_data->last_data.ept_entry = nullptr;
   processor_data->rwe_data->last_data.old_bytes.fill(0);
 }
-
-static bool RwepSrcPageCallback(_In_ void* va, _In_ ULONG64 pa,
-                                _In_opt_ void* context);
-static bool RwepDstPageCallback(_In_ void* va, _In_ ULONG64 pa,
-                                _In_opt_ void* context);
 
 // Make source ranges non-executable for normal pages and executable for
 // monitor pages
@@ -810,12 +841,8 @@ _Use_decl_annotations_ void RweVmcallApplyRanges(
 
 _Use_decl_annotations_ void RweHandleTlbFlush(ProcessorData* processor_data) {
   if (g_rwep_shared_data.v2p_map.refresh(processor_data)) {
-    RweApplyRangesVmm();
+    UtilForEachProcessorDpc(RwepApplyRangesDpcRoutine, nullptr);
   }
-}
-
-_Use_decl_annotations_ void RweApplyRangesVmm() {
-  UtilForEachProcessorDpc(RwepApplyRangesDpcRoutine, nullptr);
 }
 
 }  // extern "C"

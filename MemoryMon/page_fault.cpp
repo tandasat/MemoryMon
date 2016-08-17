@@ -7,9 +7,8 @@
 
 #include "page_fault.h"
 #include "../HyperPlatform/HyperPlatform/common.h"
-#include "../HyperPlatform/HyperPlatform/log.h"
 #include "../HyperPlatform/HyperPlatform/util.h"
-#include "page_fault_record.h"
+#include "PageFaultRecord.h"
 
 #pragma section(".asm", read, execute)
 
@@ -29,7 +28,7 @@ extern "C" {
 // sure any test code did not affect to kPfpBreakPoint. For the same
 // reason, nt!DbgBreakPoint is not used at this moment.
 //
-// Note that this handler cannot be used for #PF occured in ring-3 context, as
+// Note that this handler cannot be used for #PF occurred in ring-3 context, as
 // the Requested Privilege Level of this code is 0, obviously.
 __declspec(allocate(".asm")) static const UCHAR kPfpBreakPoint[] = {0xcc};
 
@@ -56,7 +55,7 @@ static PageFaultRecord g_pfp_record;
 //
 
 // Change guest's IP to kPfpBreakPoint up on #PF on kernel address space
-// so that #BP VM-exit occurs on complition of #PF handler
+// so that #BP VM-exit occurs on completion of #PF handler
 _Use_decl_annotations_ bool PfHanlePageFault(void* guest_ip) {
   if (guest_ip < MmSystemRangeStart) {
     return false;
@@ -71,7 +70,7 @@ _Use_decl_annotations_ bool PfHanlePageFault(void* guest_ip) {
   return true;
 }
 
-// Checks whether the #BP occured up on complition of #PF handler, and so,
+// Checks whether the #BP occurred up on completion of #PF handler, and so,
 // restores an original IP to continue guest execution as it should be
 _Use_decl_annotations_ bool PfHandleBreakpoint(void* guest_ip) {
   if (guest_ip != kPfpBreakPoint) {

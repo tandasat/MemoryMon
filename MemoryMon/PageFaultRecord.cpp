@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 /// @file
-/// Implements page-fault functions.
+/// Implements the PageFaultRecord class.
 
-#include "page_fault_record.h"
-#include "scoped_lock.h"
+#include "PageFaultRecord.h"
 #include "../HyperPlatform/HyperPlatform/kernel_stl.h"
 #include <algorithm>
+#include "ScopedLock.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 //

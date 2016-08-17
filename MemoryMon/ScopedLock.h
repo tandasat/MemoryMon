@@ -3,9 +3,12 @@
 // found in the LICENSE file.
 
 /// @file
-/// Implements the ScopedLock class.
+/// Declares interfaces to the ScopedLock class.
 
-#include "scoped_lock.h"
+#ifndef MEMORYMON_SCOPEDLOCK_H_
+#define MEMORYMON_SCOPEDLOCK_H_
+
+#include <fltKernel.h>
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -22,6 +25,16 @@
 // types
 //
 
+class ScopedLock {
+ public:
+  explicit ScopedLock(_In_ KSPIN_LOCK* spinlock);
+  ~ScopedLock();
+
+ private:
+  KSPIN_LOCK* spinlock_;
+  KLOCK_QUEUE_HANDLE lock_handle_;
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
@@ -37,11 +50,4 @@
 // implementations
 //
 
-_Use_decl_annotations_ ScopedLock::ScopedLock(KSPIN_LOCK* spinlock_)
-    : spinlock_(spinlock_) {
-  KeAcquireInStackQueuedSpinLockAtDpcLevel(spinlock_, &lock_handle_);
-}
-
-/*_Use_decl_annotations_*/ ScopedLock::~ScopedLock() {
-  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle_);
-}
+#endif  // MEMORYMON_SCOPEDLOCK_H_

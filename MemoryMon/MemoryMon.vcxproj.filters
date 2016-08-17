@@ -63,16 +63,22 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\global_object.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="scoped_lock.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="test_util.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="page_fault.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="page_fault_record.cpp">
+    <ClCompile Include="AddressRanges.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="V2PMap.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="PageFaultRecord.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ScopedLock.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -131,16 +137,22 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\global_object.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="scoped_lock.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="test_util.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="page_fault_record.h">
+    <ClInclude Include="page_fault.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="page_fault.h">
+    <ClInclude Include="AddressRanges.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="V2PMap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PageFaultRecord.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ScopedLock.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

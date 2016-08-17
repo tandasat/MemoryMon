@@ -92,28 +92,48 @@
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
+      <AdditionalIncludeDirectories>$(SolutionDir)capstone\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>MEMORYMON_ENABLE_MMIO_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(OutDir)capstone_static_winkernel.lib;ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
+      <AdditionalIncludeDirectories>$(SolutionDir)capstone\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>MEMORYMON_ENABLE_MMIO_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(OutDir)capstone_static_winkernel.lib;ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
+      <AdditionalIncludeDirectories>$(SolutionDir)capstone\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>MEMORYMON_ENABLE_MMIO_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(OutDir)capstone_static_winkernel.lib;ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">trace.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
+      <AdditionalIncludeDirectories>$(SolutionDir)capstone\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>MEMORYMON_ENABLE_MMIO_TRACE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(OutDir)capstone_static_winkernel.lib;ntstrsafe.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
@@ -129,13 +149,15 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\util.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\vm.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\vmm.cpp" />
+    <ClCompile Include="AddressRanges.cpp" />
     <ClCompile Include="memorymon.cpp" />
     <ClCompile Include="page_fault.cpp" />
-    <ClCompile Include="page_fault_record.cpp" />
+    <ClCompile Include="PageFaultRecord.cpp" />
     <ClCompile Include="rwe.cpp" />
-    <ClCompile Include="scoped_lock.cpp" />
+    <ClCompile Include="ScopedLock.cpp" />
     <ClCompile Include="test.cpp" />
     <ClCompile Include="test_util.cpp" />
+    <ClCompile Include="V2PMap.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\asm.h" />
@@ -153,13 +175,15 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\util_page_constants.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vm.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vmm.h" />
+    <ClInclude Include="AddressRanges.h" />
     <ClInclude Include="memorymon.h" />
     <ClInclude Include="page_fault.h" />
-    <ClInclude Include="page_fault_record.h" />
+    <ClInclude Include="PageFaultRecord.h" />
     <ClInclude Include="rwe.h" />
-    <ClInclude Include="scoped_lock.h" />
+    <ClInclude Include="ScopedLock.h" />
     <ClInclude Include="test.h" />
     <ClInclude Include="test_util.h" />
+    <ClInclude Include="V2PMap.h" />
   </ItemGroup>
   <ItemGroup>
     <MASM Include="..\HyperPlatform\HyperPlatform\Arch\x64\x64.asm">

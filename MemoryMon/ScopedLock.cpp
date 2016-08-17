@@ -3,14 +3,9 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to the PageFaultRecord class.
+/// Implements the ScopedLock class.
 
-#ifndef MEMORYMON_PAGE_FAULT_RECORD_H_
-#define MEMORYMON_PAGE_FAULT_RECORD_H_
-
-#include <fltKernel.h>
-#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
-#include <vector>
+#include "ScopedLock.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -27,24 +22,6 @@
 // types
 //
 
-class PageFaultRecord {
- public:
-  PageFaultRecord();
-
-  void push(_In_ PETHREAD thread, _In_ void* guest_ip);
-  bool has(_In_ PETHREAD thread) const;
-  void* pop(_In_ PETHREAD thread);
-
- private:
-  struct PageFaultRecordEntry {
-    PETHREAD thread;
-    void* guest_ip;
-  };
-
-  std::vector<PageFaultRecordEntry> record_;
-  mutable KSPIN_LOCK record_spinlock_;
-};
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
@@ -60,4 +37,11 @@ class PageFaultRecord {
 // implementations
 //
 
-#endif  // MEMORYMON_PAGE_FAULT_RECORD_H_
+_Use_decl_annotations_ ScopedLock::ScopedLock(KSPIN_LOCK* spinlock_)
+    : spinlock_(spinlock_) {
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(spinlock_, &lock_handle_);
+}
+
+/*_Use_decl_annotations_*/ ScopedLock::~ScopedLock() {
+  KeReleaseInStackQueuedSpinLockFromDpcLevel(&lock_handle_);
+}

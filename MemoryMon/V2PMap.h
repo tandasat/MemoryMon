@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to the ScopedLock class.
+/// Declares interfaces to the V2PMap2 class.
 
-#ifndef MEMORYMON_SCOPED_LOCK_H_
-#define MEMORYMON_SCOPED_LOCK_H_
+#ifndef MEMORYMON_V2PMAP_H_
+#define MEMORYMON_V2PMAP_H_
 
 #include <fltKernel.h>
+#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
+#include <vector>
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -25,14 +27,22 @@
 // types
 //
 
-class ScopedLock {
+struct ProcessorData;
+
+class V2PMap2 {
  public:
-  explicit ScopedLock(_In_ KSPIN_LOCK* spinlock);
-  ~ScopedLock();
+  V2PMap2();
+  void add(_In_ void* address, _In_ SIZE_T size);
+  bool refresh(_In_ ProcessorData* processor_data);
 
  private:
-  KSPIN_LOCK* spinlock_;
-  KLOCK_QUEUE_HANDLE lock_handle_;
+  struct V2PMapEntry {
+    void* va;
+    ULONG64 pa;
+  };
+
+  std::vector<V2PMapEntry> v2p_map_;
+  mutable KSPIN_LOCK v2p_map_spinlock_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -50,4 +60,4 @@ class ScopedLock {
 // implementations
 //
 
-#endif  // MEMORYMON_SCOPED_LOCK_H_
+#endif  // MEMORYMON_V2PMAP_H_
