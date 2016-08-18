@@ -542,79 +542,79 @@ _Use_decl_annotations_ static bool RwepGetValueFromRegister(
   ULONG64 val = 0;
   switch (reg) {
     // clang-format off
-  case X86_REG_AL:  val = gp_regs->ax & UINT8_MAX; break;
-  case X86_REG_AH:  val = (gp_regs->ax >> 8) & UINT8_MAX; break;
-  case X86_REG_AX:  val = gp_regs->ax & UINT16_MAX; break;
-  case X86_REG_EAX: val = gp_regs->ax & UINT32_MAX; break;
-  case X86_REG_RAX: val = gp_regs->ax; break;
+    case X86_REG_AL:  val = gp_regs->ax & UINT8_MAX; break;
+    case X86_REG_AH:  val = (gp_regs->ax >> 8) & UINT8_MAX; break;
+    case X86_REG_AX:  val = gp_regs->ax & UINT16_MAX; break;
+    case X86_REG_EAX: val = gp_regs->ax & UINT32_MAX; break;
+    case X86_REG_RAX: val = gp_regs->ax; break;
 
-  case X86_REG_BL:  val = gp_regs->bx & UINT8_MAX; break;
-  case X86_REG_BH:  val = (gp_regs->bx >> 8) & UINT8_MAX; break;
-  case X86_REG_BX:  val = gp_regs->bx & UINT16_MAX; break;
-  case X86_REG_EBX: val = gp_regs->bx & UINT32_MAX; break;
-  case X86_REG_RBX: val = gp_regs->bx; break;
+    case X86_REG_BL:  val = gp_regs->bx & UINT8_MAX; break;
+    case X86_REG_BH:  val = (gp_regs->bx >> 8) & UINT8_MAX; break;
+    case X86_REG_BX:  val = gp_regs->bx & UINT16_MAX; break;
+    case X86_REG_EBX: val = gp_regs->bx & UINT32_MAX; break;
+    case X86_REG_RBX: val = gp_regs->bx; break;
 
-  case X86_REG_CL:  val = gp_regs->cx & UINT8_MAX; break;
-  case X86_REG_CH:  val = (gp_regs->cx >> 8) & UINT8_MAX; break;
-  case X86_REG_CX:  val = gp_regs->cx & UINT16_MAX; break;
-  case X86_REG_ECX: val = gp_regs->cx & UINT32_MAX; break;
-  case X86_REG_RCX: val = gp_regs->cx; break;
+    case X86_REG_CL:  val = gp_regs->cx & UINT8_MAX; break;
+    case X86_REG_CH:  val = (gp_regs->cx >> 8) & UINT8_MAX; break;
+    case X86_REG_CX:  val = gp_regs->cx & UINT16_MAX; break;
+    case X86_REG_ECX: val = gp_regs->cx & UINT32_MAX; break;
+    case X86_REG_RCX: val = gp_regs->cx; break;
 
-  case X86_REG_DL:  val = gp_regs->dx & UINT8_MAX; break;
-  case X86_REG_DH:  val = (gp_regs->dx >> 8) & UINT8_MAX; break;
-  case X86_REG_DX:  val = gp_regs->dx & UINT16_MAX; break;
-  case X86_REG_EDX: val = gp_regs->dx & UINT32_MAX; break;
-  case X86_REG_RDX: val = gp_regs->dx; break;
+    case X86_REG_DL:  val = gp_regs->dx & UINT8_MAX; break;
+    case X86_REG_DH:  val = (gp_regs->dx >> 8) & UINT8_MAX; break;
+    case X86_REG_DX:  val = gp_regs->dx & UINT16_MAX; break;
+    case X86_REG_EDX: val = gp_regs->dx & UINT32_MAX; break;
+    case X86_REG_RDX: val = gp_regs->dx; break;
 
-  case X86_REG_DIL: val = gp_regs->di & UINT8_MAX; break;
-  case X86_REG_DI:  val = gp_regs->di & UINT16_MAX; break;
-  case X86_REG_EDI: val = gp_regs->di & UINT32_MAX; break;
-  case X86_REG_RDI: val = gp_regs->di; break;
+    case X86_REG_DIL: val = gp_regs->di & UINT8_MAX; break;
+    case X86_REG_DI:  val = gp_regs->di & UINT16_MAX; break;
+    case X86_REG_EDI: val = gp_regs->di & UINT32_MAX; break;
+    case X86_REG_RDI: val = gp_regs->di; break;
 
-  case X86_REG_SIL: val = gp_regs->si & UINT8_MAX; break;
-  case X86_REG_SI:  val = gp_regs->si & UINT16_MAX; break;
-  case X86_REG_ESI: val = gp_regs->si & UINT32_MAX; break;
-  case X86_REG_RSI: val = gp_regs->si; break;
+    case X86_REG_SIL: val = gp_regs->si & UINT8_MAX; break;
+    case X86_REG_SI:  val = gp_regs->si & UINT16_MAX; break;
+    case X86_REG_ESI: val = gp_regs->si & UINT32_MAX; break;
+    case X86_REG_RSI: val = gp_regs->si; break;
 
-  case X86_REG_R8B: val = gp_regs->r8 & UINT8_MAX; break;
-  case X86_REG_R8W: val = gp_regs->r8 & UINT16_MAX; break;
-  case X86_REG_R8D: val = gp_regs->r8 & UINT32_MAX; break;
-  case X86_REG_R8:  val = gp_regs->r8; break;
+    case X86_REG_R8B: val = gp_regs->r8 & UINT8_MAX; break;
+    case X86_REG_R8W: val = gp_regs->r8 & UINT16_MAX; break;
+    case X86_REG_R8D: val = gp_regs->r8 & UINT32_MAX; break;
+    case X86_REG_R8:  val = gp_regs->r8; break;
 
-  case X86_REG_R9B: val = gp_regs->r9 & UINT8_MAX; break;
-  case X86_REG_R9W: val = gp_regs->r9 & UINT16_MAX; break;
-  case X86_REG_R9D: val = gp_regs->r9 & UINT32_MAX; break;
-  case X86_REG_R9:  val = gp_regs->r9; break;
+    case X86_REG_R9B: val = gp_regs->r9 & UINT8_MAX; break;
+    case X86_REG_R9W: val = gp_regs->r9 & UINT16_MAX; break;
+    case X86_REG_R9D: val = gp_regs->r9 & UINT32_MAX; break;
+    case X86_REG_R9:  val = gp_regs->r9; break;
 
-  case X86_REG_R10B: val = gp_regs->r10 & UINT8_MAX; break;
-  case X86_REG_R10W: val = gp_regs->r10 & UINT16_MAX; break;
-  case X86_REG_R10D: val = gp_regs->r10 & UINT32_MAX; break;
-  case X86_REG_R10:  val = gp_regs->r10; break;
+    case X86_REG_R10B: val = gp_regs->r10 & UINT8_MAX; break;
+    case X86_REG_R10W: val = gp_regs->r10 & UINT16_MAX; break;
+    case X86_REG_R10D: val = gp_regs->r10 & UINT32_MAX; break;
+    case X86_REG_R10:  val = gp_regs->r10; break;
 
-  case X86_REG_R11B: val = gp_regs->r11 & UINT8_MAX; break;
-  case X86_REG_R11W: val = gp_regs->r11 & UINT16_MAX; break;
-  case X86_REG_R11D: val = gp_regs->r11 & UINT32_MAX; break;
-  case X86_REG_R11:  val = gp_regs->r11; break;
+    case X86_REG_R11B: val = gp_regs->r11 & UINT8_MAX; break;
+    case X86_REG_R11W: val = gp_regs->r11 & UINT16_MAX; break;
+    case X86_REG_R11D: val = gp_regs->r11 & UINT32_MAX; break;
+    case X86_REG_R11:  val = gp_regs->r11; break;
 
-  case X86_REG_R12B: val = gp_regs->r12 & UINT8_MAX; break;
-  case X86_REG_R12W: val = gp_regs->r12 & UINT16_MAX; break;
-  case X86_REG_R12D: val = gp_regs->r12 & UINT32_MAX; break;
-  case X86_REG_R12:  val = gp_regs->r12; break;
+    case X86_REG_R12B: val = gp_regs->r12 & UINT8_MAX; break;
+    case X86_REG_R12W: val = gp_regs->r12 & UINT16_MAX; break;
+    case X86_REG_R12D: val = gp_regs->r12 & UINT32_MAX; break;
+    case X86_REG_R12:  val = gp_regs->r12; break;
 
-  case X86_REG_R13B: val = gp_regs->r13 & UINT8_MAX; break;
-  case X86_REG_R13W: val = gp_regs->r13 & UINT16_MAX; break;
-  case X86_REG_R13D: val = gp_regs->r13 & UINT32_MAX; break;
-  case X86_REG_R13:  val = gp_regs->r13; break;
+    case X86_REG_R13B: val = gp_regs->r13 & UINT8_MAX; break;
+    case X86_REG_R13W: val = gp_regs->r13 & UINT16_MAX; break;
+    case X86_REG_R13D: val = gp_regs->r13 & UINT32_MAX; break;
+    case X86_REG_R13:  val = gp_regs->r13; break;
 
-  case X86_REG_R14B: val = gp_regs->r14 & UINT8_MAX; break;
-  case X86_REG_R14W: val = gp_regs->r14 & UINT16_MAX; break;
-  case X86_REG_R14D: val = gp_regs->r14 & UINT32_MAX; break;
-  case X86_REG_R14:  val = gp_regs->r14; break;
+    case X86_REG_R14B: val = gp_regs->r14 & UINT8_MAX; break;
+    case X86_REG_R14W: val = gp_regs->r14 & UINT16_MAX; break;
+    case X86_REG_R14D: val = gp_regs->r14 & UINT32_MAX; break;
+    case X86_REG_R14:  val = gp_regs->r14; break;
 
-  case X86_REG_R15B: val = gp_regs->r15 & UINT8_MAX; break;
-  case X86_REG_R15W: val = gp_regs->r15 & UINT16_MAX; break;
-  case X86_REG_R15D: val = gp_regs->r15 & UINT32_MAX; break;
-  case X86_REG_R15:  val = gp_regs->r15; break;
+    case X86_REG_R15B: val = gp_regs->r15 & UINT8_MAX; break;
+    case X86_REG_R15W: val = gp_regs->r15 & UINT16_MAX; break;
+    case X86_REG_R15D: val = gp_regs->r15 & UINT32_MAX; break;
+    case X86_REG_R15:  val = gp_regs->r15; break;
     // clang-format on
 
     default:
@@ -625,10 +625,11 @@ _Use_decl_annotations_ static bool RwepGetValueFromRegister(
   return true;
 }
 
-_Use_decl_annotations_ static bool RwepGetWriteValue(void* address,
-                                                     GpRegisters* gp_regs,
-                                                     ULONG64* value,
-                                                     SIZE_T* size) {
+_Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
+                                                    GpRegisters* gp_regs,
+                                                    bool is_write,
+                                                    ULONG64* value,
+                                                    SIZE_T* size) {
   bool result = false;
 
   // NT_ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
@@ -661,30 +662,51 @@ _Use_decl_annotations_ static bool RwepGetWriteValue(void* address,
   const auto& inst = insn[0];
   HYPERPLATFORM_LOG_INFO_SAFE("%s %s", inst.mnemonic, inst.op_str);
 
-  switch (inst.id) {
-    case X86_INS_MOV:
-    case X86_INS_STOSB:
-    case X86_INS_STOSD:
-    case X86_INS_STOSQ:
-    case X86_INS_STOSW:
-      break;
-    default:
+  if (is_write) {
+    switch (inst.id) {
+      case X86_INS_MOV:
+      case X86_INS_STOSB:
+      case X86_INS_STOSD:
+      case X86_INS_STOSQ:
+      case X86_INS_STOSW:
+        break;
+      default:
+        goto exit;
+    }
+
+    if (inst.detail->x86.op_count != 2) {
       goto exit;
-  }
+    }
 
-  if (inst.detail->x86.op_count != 2) {
-    goto exit;
-  }
-
-  const auto& second_operand = inst.detail->x86.operands[1];
-  if (second_operand.type == X86_OP_REG &&
-      RwepGetValueFromRegister(gp_regs, second_operand.reg, value)) {
-    *size = second_operand.size;
-  } else if (second_operand.type == X86_OP_IMM) {
-    *value = second_operand.imm;
-    *size = second_operand.size;
+    const auto& second_operand = inst.detail->x86.operands[1];
+    if (second_operand.type == X86_OP_REG &&
+        RwepGetValueFromRegister(gp_regs, second_operand.reg, value)) {
+      *size = second_operand.size;
+    } else if (second_operand.type == X86_OP_IMM) {
+      *value = second_operand.imm;
+      *size = second_operand.size;
+    } else {
+      goto exit;
+    }
   } else {
-    goto exit;
+    switch (inst.id) {
+      case X86_INS_MOV:
+        break;
+      default:
+        goto exit;
+    }
+
+    if (inst.detail->x86.op_count != 2) {
+      goto exit;
+    }
+
+    const auto& first_operand = inst.detail->x86.operands[0];
+    if (first_operand.type == X86_OP_REG &&
+        RwepGetValueFromRegister(gp_regs, first_operand.reg, value)) {
+      *size = first_operand.size;
+    } else {
+      goto exit;
+    }
   }
 
   result = true;
@@ -747,33 +769,34 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
         "S= %p (%p), D= %p (%p), T= W",
         processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
         processor_data->rwe_data->last_data.fault_va, fault_va_base);
-#endif
-
-#if defined(MEMORYMON_ENABLE_MMIO_TRACE)
-    ULONG64 value = 0;
-    SIZE_T size = 0;
-    if (RwepGetWriteValue(processor_data->rwe_data->last_data.guest_ip, gp_regs,
-                          &value, &size)) {
-      // clang-format off
-      switch (size) {
-      case 1: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %02x", value & UINT8_MAX); break;
-      case 2: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %04x", value & UINT16_MAX); break;
-      case 4: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %08x", value & UINT32_MAX); break;
-      case 8: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %016llx", value); break;
-      default: HYPERPLATFORM_COMMON_DBG_BREAK(); break;
-      }
-      // clang-format on
-    } else {
-      HYPERPLATFORM_COMMON_DBG_BREAK();
-    }
-#endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE)
-
+#endif)
   } else {
     HYPERPLATFORM_LOG_INFO_SAFE(
         "S= %p (%p), D= %p (%p), T= R",
         processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
         processor_data->rwe_data->last_data.fault_va, fault_va_base);
   }
+
+#if defined(MEMORYMON_ENABLE_MMIO_TRACE)
+  ULONG64 value = 0;
+  SIZE_T size = 0;
+  if (RwepGetMmIoValue(processor_data->rwe_data->last_data.guest_ip, gp_regs,
+                       processor_data->rwe_data->last_data.is_write, &value,
+                       &size)) {
+    // clang-format off
+    switch (size) {
+    case 1: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %02x", value & UINT8_MAX); break;
+    case 2: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %04x", value & UINT16_MAX); break;
+    case 4: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %08x", value & UINT32_MAX); break;
+    case 8: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %016llx", value); break;
+    default: HYPERPLATFORM_COMMON_DBG_BREAK(); break;
+    }
+    // clang-format on
+  } else {
+    HYPERPLATFORM_COMMON_DBG_BREAK();
+  }
+#endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE
+
   processor_data->rwe_data->last_data.is_write = false;
   processor_data->rwe_data->last_data.guest_ip = 0;
   processor_data->rwe_data->last_data.fault_va = 0;
