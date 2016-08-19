@@ -93,12 +93,12 @@ _Use_decl_annotations_ void TestRwe() {
 
 #if defined(MEMORYMON_ENABLE_MMIO_TRACE)
   TestpForEachDriver(TestpForEachDriverCallback, nullptr);
-  HYPERPLATFORM_COMMON_DBG_BREAK();
   RweApplyRanges();
   HYPERPLATFORM_LOG_DEBUG("Enabled.");
 #else
   // Set TestpRwe1() and TestpRwe2() as source ranges. Those functions are
-  // located at the page boundaries: xxxxTEST and PAGETEST sections respectively.
+  // located at the page boundaries: xxxxTEST and PAGETEST sections
+  // respectively.
   // It is safe to set an entire pages as source ranges as those sections do not
   // contain any other contents.
   RweAddSrcRange(&TestpRwe1, PAGE_SIZE);

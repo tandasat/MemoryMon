@@ -24,9 +24,6 @@
     </Inf>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="memorymon.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\HyperPlatform\HyperPlatform\driver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -83,9 +80,6 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="memorymon.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\asm.h">
       <Filter>Header Files</Filter>
     </ClInclude>

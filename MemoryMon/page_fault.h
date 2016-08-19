@@ -31,7 +31,7 @@ extern "C" {
 // prototypes
 //
 
-bool PfHanlePageFault(_In_ void* guest_ip);
+bool PfHandlePageFault(_In_ void* guest_ip);
 
 bool PfHandleBreakpoint(_In_ void* guest_ip);
 

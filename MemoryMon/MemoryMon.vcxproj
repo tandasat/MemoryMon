@@ -150,7 +150,6 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\vm.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\vmm.cpp" />
     <ClCompile Include="AddressRanges.cpp" />
-    <ClCompile Include="memorymon.cpp" />
     <ClCompile Include="page_fault.cpp" />
     <ClCompile Include="PageFaultRecord.cpp" />
     <ClCompile Include="rwe.cpp" />
@@ -176,7 +175,6 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vm.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vmm.h" />
     <ClInclude Include="AddressRanges.h" />
-    <ClInclude Include="memorymon.h" />
     <ClInclude Include="page_fault.h" />
     <ClInclude Include="PageFaultRecord.h" />
     <ClInclude Include="rwe.h" />

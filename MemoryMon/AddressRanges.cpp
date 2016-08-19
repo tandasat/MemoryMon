@@ -45,18 +45,6 @@
 }
 
 _Use_decl_annotations_ void AddressRanges::add(void* address, SIZE_T size) {
-  // const auto position = std::find_if(
-  //  ranges_.begin(), ranges_.end(),
-  //  [range](const auto& elem) { return (range.start_address ==
-  //  elem.start_address
-  //    && range.end_address == elem.end_address); });
-  // if (position != ranges_.end()) {
-  //  return;   // duplicated; ignore it
-  //}
-
-  // sort(vec.begin(), vec.end());
-  // vec.erase(unique(vec.begin(), vec.end()), vec.end());
-
   const auto end_address =
       reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1);
   ranges_.push_back(AddressRangeEntry{address, end_address});

@@ -9,7 +9,6 @@
 #define MEMORYMON_RWE_H_
 
 #include <fltKernel.h>
-#include "../HyperPlatform/HyperPlatform/ia32_type.h"
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -30,6 +29,12 @@ extern "C" {
 struct ProcessorData;
 
 struct RweData;
+
+#if defined(_AMD64_)
+using GpRegisters = struct GpRegistersX64;
+#else
+using GpRegisters = struct GpRegistersX86;
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 //

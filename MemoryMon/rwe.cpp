@@ -64,6 +64,7 @@ struct RweSharedData {
   AddressRanges src_ranges;
   AddressRanges dst_ranges;
   V2PMap2 v2p_map;
+  bool applied;
 };
 
 // dt nt!_kIDTENTRY64
@@ -96,18 +97,25 @@ static_assert(sizeof(IDTENTRY64) == 0x10, "Size check");
 static KDEFERRED_ROUTINE RwepApplyRangesDpcRoutine;
 
 static void RweSwtichToNormalMode(_Inout_ ProcessorData* processor_data);
+
 static void RwepSwitchToMonitoringMode(_Inout_ ProcessorData* processor_data);
+
 static void RwepHandleExecuteViolation(_Inout_ ProcessorData* processor_data,
                                        _In_ void* fault_va);
+
 static void RewpSetMonitorTrapFlag(_In_ bool enable);
+
 static void RewpSetReadWriteOnPage(_In_ bool allow_read_write,
                                    _Out_ EptCommonEntry* ept_entry);
+
 static void* RwepContextCopyMemory(_Out_ void* destination,
                                    _In_ const void* source, _In_ SIZE_T length);
+
 static void RewpHandleReadWriteViolation(_Inout_ ProcessorData* processor_data,
                                          _In_ void* guest_ip,
                                          _In_ void* fault_va,
                                          _In_ bool is_write);
+
 static NTSTATUS RwepBytesToString(_Out_ char* buffer, _In_ SIZE_T buffer_size,
                                   _In_ const UCHAR* bytes,
                                   _In_ SIZE_T bytes_size);
@@ -120,8 +128,14 @@ static bool RwepDstPageCallback(_In_ void* va, _In_ ULONG64 pa,
 
 static void* RwepFindSourceAddressForExec(_In_ void* return_addr);
 
-static bool RwepGetValueFromRegister(_Inout_ GpRegisters* gp_regs,
-                                     _In_ x86_reg reg, _Out_ ULONG64* value);
+_Success_(return ) static bool RwepGetValueFromRegister(
+    _Inout_ GpRegisters* gp_regs, _In_ x86_reg reg, _Out_ ULONG64* value);
+
+_Success_(return ) static bool RwepGetMmIoValue(_In_ void* address,
+                                                _In_ GpRegisters* gp_regs,
+                                                _In_ bool is_write,
+                                                _Out_ ULONG64* value,
+                                                _Out_ SIZE_T* size);
 
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, RweAllocData)
@@ -471,13 +485,13 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   //  Dst   x   x
   //  Oth   x   o
 
-  // most of cases. if the operation happend just outside, may be not
+  // most of cases. if the operation happed just outside, may be not
   NT_ASSERT(RweIsInsideDstRange(fault_va));
 
   const auto ept_entry = EptGetEptPtEntry(
       processor_data->ept_data, UtilVmRead64(VmcsField::kGuestPhysicalAddress));
 
-  // Tempolarily switch to
+  // Temporarily switch to
   //        E   RW
   //  Src   o   o
   //  Dst   x   o
@@ -576,6 +590,11 @@ _Use_decl_annotations_ static bool RwepGetValueFromRegister(
     case X86_REG_ESI: val = gp_regs->si & UINT32_MAX; break;
     case X86_REG_RSI: val = gp_regs->si; break;
 
+    case X86_REG_BPL: val = gp_regs->r15 & UINT8_MAX; break;
+    case X86_REG_BP:  val = gp_regs->r15 & UINT16_MAX; break;
+    case X86_REG_EBP: val = gp_regs->r15 & UINT32_MAX; break;
+    case X86_REG_RBP: val = gp_regs->r15; break;
+
     case X86_REG_R8B: val = gp_regs->r8 & UINT8_MAX; break;
     case X86_REG_R8W: val = gp_regs->r8 & UINT16_MAX; break;
     case X86_REG_R8D: val = gp_regs->r8 & UINT32_MAX; break;
@@ -649,9 +668,9 @@ _Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
   const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
   __writecr3(guest_cr3);
 
-  cs_insn* insn = {};
-  auto count =
-      cs_disasm(handle, (uint8_t*)address, 15, (uint64_t)address, 0, &insn);
+  cs_insn* instructions = {};
+  auto count = cs_disasm(handle, (uint8_t*)address, 15, (uint64_t)address, 0,
+                         &instructions);
 
   __writecr3(current_cr3);
   if (count == 0) {
@@ -659,8 +678,8 @@ _Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
     return result;
   }
 
-  const auto& inst = insn[0];
-  HYPERPLATFORM_LOG_INFO_SAFE("%s %s", inst.mnemonic, inst.op_str);
+  const auto& inst = instructions[0];
+  HYPERPLATFORM_LOG_DEBUG_SAFE("%s %s", inst.mnemonic, inst.op_str);
 
   if (is_write) {
     switch (inst.id) {
@@ -712,7 +731,7 @@ _Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
   result = true;
 
 exit:;
-  cs_free(insn, count);
+  cs_free(instructions, count);
   cs_close(&handle);
   return result;
 }
@@ -785,14 +804,15 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
                        &size)) {
     // clang-format off
     switch (size) {
-    case 1: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %02x", value & UINT8_MAX); break;
-    case 2: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %04x", value & UINT16_MAX); break;
-    case 4: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %08x", value & UINT32_MAX); break;
-    case 8: HYPERPLATFORM_LOG_DEBUG_SAFE("Value= %016llx", value); break;
+    case 1: HYPERPLATFORM_LOG_INFO_SAFE("Value= %02x", value & UINT8_MAX); break;
+    case 2: HYPERPLATFORM_LOG_INFO_SAFE("Value= %04x", value & UINT16_MAX); break;
+    case 4: HYPERPLATFORM_LOG_INFO_SAFE("Value= %08x", value & UINT32_MAX); break;
+    case 8: HYPERPLATFORM_LOG_INFO_SAFE("Value= %016llx", value); break;
     default: HYPERPLATFORM_COMMON_DBG_BREAK(); break;
     }
     // clang-format on
   } else {
+    // Failed to get value. Most likely due to unsupported instruction
     HYPERPLATFORM_COMMON_DBG_BREAK();
   }
 #endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE
@@ -858,7 +878,7 @@ _Use_decl_annotations_ void RweVmcallApplyRanges(
                                               processor_data);
   g_rwep_shared_data.dst_ranges.for_each_page(RwepDstPageCallback,
                                               processor_data);
-
+  g_rwep_shared_data.applied = true;
   UtilInveptAll();
 }
 

@@ -56,10 +56,7 @@ static PageFaultRecord g_pfp_record;
 
 // Change guest's IP to kPfpBreakPoint up on #PF on kernel address space
 // so that #BP VM-exit occurs on completion of #PF handler
-_Use_decl_annotations_ bool PfHanlePageFault(void* guest_ip) {
-  if (guest_ip < MmSystemRangeStart) {
-    return false;
-  }
+_Use_decl_annotations_ bool PfHandlePageFault(void* guest_ip) {
   if (g_pfp_record.has(PsGetCurrentThread())) {
     return false;
   }

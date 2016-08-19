@@ -42,7 +42,9 @@
 // implementations
 //
 
-/*_Use_decl_annotations_*/ V2PMap2::V2PMap2() { KeInitializeSpinLock(&v2p_map_spinlock_); }
+/*_Use_decl_annotations_*/ V2PMap2::V2PMap2() {
+  KeInitializeSpinLock(&v2p_map_spinlock_);
+}
 
 _Use_decl_annotations_ void V2PMap2::add(void* address, SIZE_T size) {
   const auto start_address = reinterpret_cast<ULONG_PTR>(address);
