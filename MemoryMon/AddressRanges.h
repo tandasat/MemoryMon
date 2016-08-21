@@ -8,7 +8,9 @@
 #ifndef MEMORYMON_ADDRESSRANGES_H_
 #define MEMORYMON_ADDRESSRANGES_H_
 
-#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
+#include <fltKernel.h>
+#undef _HAS_EXCEPTIONS
+#define _HAS_EXCEPTIONS 0
 #include <vector>
 
 ////////////////////////////////////////////////////////////////////////////////

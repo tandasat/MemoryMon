@@ -3,15 +3,15 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to the PageFaultRecord class.
+/// Declares interfaces to the InterruptHandlers class.
 
-#ifndef MEMORYMON_PAGEFAULTRECORD_H_
-#define MEMORYMON_PAGEFAULTRECORD_H_
+#ifndef MEMORYMON_INTERRUPTHANDLERS_H_
+#define MEMORYMON_INTERRUPTHANDLERS_H_
 
 #include <fltKernel.h>
 #undef _HAS_EXCEPTIONS
 #define _HAS_EXCEPTIONS 0
-#include <vector>
+#include <array>
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -28,22 +28,19 @@
 // types
 //
 
-class PageFaultRecord {
+class InterruptHandlers {
  public:
-  PageFaultRecord();
+  InterruptHandlers();
 
-  void push(_In_ PETHREAD thread, _In_ void* guest_ip);
-  bool has(_In_ PETHREAD thread) const;
-  void* pop(_In_ PETHREAD thread);
+  bool has(void* addr) const;
 
  private:
-  struct PageFaultRecordEntry {
-    PETHREAD thread;
-    void* guest_ip;
+  struct InterruptHandlerEntry {
+    void* handler;
+    mutable volatile LONG64 hit_counter;
   };
 
-  std::vector<PageFaultRecordEntry> record_;
-  mutable KSPIN_LOCK record_spinlock_;
+  std::array<InterruptHandlerEntry, 0xff> handlers;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -61,4 +58,4 @@ class PageFaultRecord {
 // implementations
 //
 
-#endif  // MEMORYMON_PAGEFAULTRECORD_H_
+#endif MEMORYMON_INTERRUPTHANDLERS_H_

@@ -12,9 +12,7 @@
 #include "../HyperPlatform/HyperPlatform/util.h"
 #include "rwe.h"
 #include "test_util.h"
-
-// unreferenced local function has been removed
-#pragma warning(disable : 4505)
+#include "mem_trace.h"
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -91,14 +89,17 @@ _Use_decl_annotations_ void TestRwe() {
 
   HYPERPLATFORM_COMMON_DBG_BREAK();
 
-#if defined(MEMORYMON_ENABLE_MMIO_TRACE)
-  TestpForEachDriver(TestpForEachDriverCallback, nullptr);
-  RweApplyRanges();
-  HYPERPLATFORM_LOG_DEBUG("Enabled.");
-#else
+  if (MemTraceIsEnabled()) {
+    TestpForEachDriver(TestpForEachDriverCallback, nullptr);
+    RweApplyRanges();
+    HYPERPLATFORM_LOG_INFO("Enabled.");
+    return;
+  }
+
   // Set TestpRwe1() and TestpRwe2() as source ranges. Those functions are
   // located at the page boundaries: xxxxTEST and PAGETEST sections
   // respectively.
+  //
   // It is safe to set an entire pages as source ranges as those sections do not
   // contain any other contents.
   RweAddSrcRange(&TestpRwe1, PAGE_SIZE);
@@ -131,7 +132,7 @@ _Use_decl_annotations_ void TestRwe() {
   // Forcibly page out memory as much as possible.
   NT_VERIFY(NT_SUCCESS(TestUtilPageOut()));
 
-  // Run the second test. Some of ranges will not be backed by PA untill they
+  // Run the second test. Some of ranges will not be backed by PA until they
   // are accessed by test code.
   HYPERPLATFORM_COMMON_DBG_BREAK();
   TestpRwe1(pagable_test_page);
@@ -141,8 +142,6 @@ _Use_decl_annotations_ void TestRwe() {
   // Test finished
   HYPERPLATFORM_COMMON_DBG_BREAK();
   ExFreePoolWithTag(pagable_test_page, kHyperPlatformCommonPoolTag);
-
-#endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE)
 }
 
 // A test function located in a non-pagable page
@@ -256,6 +255,7 @@ _Use_decl_annotations_ static bool TestpForEachDriverCallback(
                     module.OffsetToFileName;
   if (strcmp(name, "storahci.sys") == 0) {
     RweAddSrcRange(module.ImageBase, module.ImageSize);
+    return false;   // stop enumeration
   }
   return true;
 }

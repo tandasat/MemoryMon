@@ -6,7 +6,6 @@
 /// Implements the PageFaultRecord class.
 
 #include "PageFaultRecord.h"
-#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
 #include <algorithm>
 #include "ScopedLock.h"
 

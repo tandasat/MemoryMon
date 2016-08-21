@@ -3,16 +3,14 @@
 // found in the LICENSE file.
 
 /// @file
-/// Declares interfaces to the PageFaultRecord class.
+/// Declares mem_trace functions.
 
-#ifndef MEMORYMON_PAGEFAULTRECORD_H_
-#define MEMORYMON_PAGEFAULTRECORD_H_
+#ifndef MEMORYMON_MEM_TRACE_H_
+#define MEMORYMON_MEM_TRACE_H_
 
 #include <fltKernel.h>
-#undef _HAS_EXCEPTIONS
-#define _HAS_EXCEPTIONS 0
-#include <vector>
 
+extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
 //
 // macro utilities
@@ -28,28 +26,24 @@
 // types
 //
 
-class PageFaultRecord {
- public:
-  PageFaultRecord();
-
-  void push(_In_ PETHREAD thread, _In_ void* guest_ip);
-  bool has(_In_ PETHREAD thread) const;
-  void* pop(_In_ PETHREAD thread);
-
- private:
-  struct PageFaultRecordEntry {
-    PETHREAD thread;
-    void* guest_ip;
-  };
-
-  std::vector<PageFaultRecordEntry> record_;
-  mutable KSPIN_LOCK record_spinlock_;
-};
+#if defined(_AMD64_)
+using GpRegisters = struct GpRegistersX64;
+#else
+using GpRegisters = struct GpRegistersX86;
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
+
+bool MemTraceIsEnabled();
+
+bool MemTraceIsTargetAddress(_In_ ULONG64 pa);
+
+_Success_(return ) bool MemTraceHandleReadWrite(_In_ void* guest_ip,
+                                                _Inout_ GpRegisters* gp_regs,
+                                                _In_ bool is_write);
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -61,4 +55,6 @@ class PageFaultRecord {
 // implementations
 //
 
-#endif  // MEMORYMON_PAGEFAULTRECORD_H_
+}  // extern "C"
+
+#endif MEMORYMON_MEM_TRACE_H_

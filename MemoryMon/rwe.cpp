@@ -15,11 +15,8 @@
 #include "../HyperPlatform/HyperPlatform/vmm.h"
 #include "V2PMap.h"
 #include "AddressRanges.h"
-#include <array>
-#include <capstone.h>
-
-// unreferenced local function has been removed
-#pragma warning(disable : 4505)
+#include "InterruptHandlers.h"
+#include "mem_trace.h"
 
 #if !defined(_AMD64_)
 #error This project does not support x86 yet.
@@ -67,28 +64,6 @@ struct RweSharedData {
   bool applied;
 };
 
-// dt nt!_kIDTENTRY64
-struct IDTENTRY64 {
-  USHORT OffsetLow;
-  USHORT Selector;
-  union {
-    USHORT Access;
-    struct {
-      USHORT IstIndex : 3;
-      USHORT Reserved0 : 5;
-      USHORT Type : 5;  // 0101(0x5) = Task Gates
-                        // 1110(0xE) = Interrupt Gates
-                        // 1111(0xF) = Trap Gates
-      USHORT Dpl : 2;
-      USHORT Present : 1;
-    } AccessField;
-  };
-  USHORT OffsetMiddle;
-  ULONG OffsetHigh;
-  ULONG Reserved1;
-};
-static_assert(sizeof(IDTENTRY64) == 0x10, "Size check");
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
@@ -128,15 +103,6 @@ static bool RwepDstPageCallback(_In_ void* va, _In_ ULONG64 pa,
 
 static void* RwepFindSourceAddressForExec(_In_ void* return_addr);
 
-_Success_(return ) static bool RwepGetValueFromRegister(
-    _Inout_ GpRegisters* gp_regs, _In_ x86_reg reg, _Out_ ULONG64* value);
-
-_Success_(return ) static bool RwepGetMmIoValue(_In_ void* address,
-                                                _In_ GpRegisters* gp_regs,
-                                                _In_ bool is_write,
-                                                _Out_ ULONG64* value,
-                                                _Out_ SIZE_T* size);
-
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, RweAllocData)
 #pragma alloc_text(INIT, RweSetDefaultEptAttributes)
@@ -151,41 +117,6 @@ _Success_(return ) static bool RwepGetMmIoValue(_In_ void* address,
 
 static RweSharedData g_rwep_shared_data;
 
-struct InterruptHandlers {
-  struct InterruptHandlerEntry {
-    void* handler;
-    volatile LONG64 hit_counter;
-  };
-
-  std::array<InterruptHandlerEntry, 0xff> handlers;
-
-  InterruptHandlers() {
-    Idtr idtr = {};
-    __sidt(&idtr);
-
-    const auto entries = reinterpret_cast<IDTENTRY64*>(idtr.base);
-    NT_ASSERT(entries);
-
-    for (auto i = 0ul; i < handlers.size(); ++i) {
-      const auto high = static_cast<ULONG_PTR>(entries[i].OffsetHigh) << 32;
-      const auto middle = static_cast<ULONG_PTR>(entries[i].OffsetMiddle) << 16;
-      const auto low = static_cast<ULONG_PTR>(entries[i].OffsetLow);
-      const auto handler = (high | middle | low);
-
-      handlers[i].handler = reinterpret_cast<void*>(handler);
-    }
-  }
-
-  bool has(void* addr) {
-    for (auto& handler : handlers) {
-      if (handler.handler == addr) {
-        InterlockedIncrement64(&handler.hit_counter);
-        return true;
-      }
-    }
-    return false;
-  }
-};
 static InterruptHandlers g_rewp_int_handlers;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -206,7 +137,7 @@ _Use_decl_annotations_ void RweFreeData(RweData* rwe_data) {
 _Use_decl_annotations_ void RweAddSrcRange(void* address, SIZE_T size) {
   const auto end_address =
       reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1);
-  HYPERPLATFORM_LOG_DEBUG_SAFE("Add SRC range: %p - %p", address, end_address);
+  HYPERPLATFORM_LOG_INFO_SAFE("Add SRC range: %p - %p", address, end_address);
   g_rwep_shared_data.src_ranges.add(address, size);
   g_rwep_shared_data.v2p_map.add(address, size);
 }
@@ -214,7 +145,7 @@ _Use_decl_annotations_ void RweAddSrcRange(void* address, SIZE_T size) {
 _Use_decl_annotations_ void RweAddDstRange(void* address, SIZE_T size) {
   const auto end_address =
       reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(address) + size - 1);
-  HYPERPLATFORM_LOG_DEBUG_SAFE("Add DST range: %p - %p", address, end_address);
+  HYPERPLATFORM_LOG_INFO_SAFE("Add DST range: %p - %p", address, end_address);
   g_rwep_shared_data.dst_ranges.add(address, size);
   g_rwep_shared_data.v2p_map.add(address, size);
 }
@@ -262,11 +193,9 @@ _Use_decl_annotations_ void RweApplyRanges() {
 // Set a va associated with 0xfd5fa000 as a dest range
 _Use_decl_annotations_ void RweHandleNewDeviceMemoryAccess(ULONG64 pa,
                                                            void* va) {
-#if defined(MEMORYMON_ENABLE_MMIO_TRACE)
-  if (reinterpret_cast<ULONG64>(PAGE_ALIGN(pa)) == 0xfd5fa000) {
+  if (MemTraceIsTargetAddress(pa)) {
     RweAddDstRange(PAGE_ALIGN(va), PAGE_SIZE);
   }
-#endif
 }
 
 _Use_decl_annotations_ static void RwepApplyRangesDpcRoutine(
@@ -365,7 +294,9 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //  Oth   x   o
     RwepSwitchToMonitoringMode(processor_data);
 
-#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
+    if (MemTraceIsEnabled()) {
+      return;
+    }
     const auto guest_sp =
         reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
     void* return_address = nullptr;
@@ -391,7 +322,6 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
                                    return_address, return_base, fault_va,
                                    fault_base);
     }
-#endif  // !defined(MEMORYMON_ENABLE_MMIO_TRACE)
 
   } else {
     // Presumably, someone is leaving a source range
@@ -409,7 +339,9 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //  Oth   o   o
     RweSwtichToNormalMode(processor_data);
 
-#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
+    if (MemTraceIsEnabled()) {
+      return;
+    }
     const auto guest_sp =
         reinterpret_cast<void**>(UtilVmRead(VmcsField::kGuestRsp));
     void* return_address = nullptr;
@@ -420,29 +352,29 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     //    - RET from a source range to other range
     //    - conditional and unconditional jump from a source range to other
     //    range
-    if (RweIsInsideSrcRange(return_address)) {
-      const auto fault_base = UtilPcToFileHeader(fault_va);
-      const auto is_interrupt = g_rewp_int_handlers.has(fault_va);
-      const auto src_addr = (is_interrupt)
-                                ? return_address
-                                : RwepFindSourceAddressForExec(return_address);
-
-      if (!src_addr) {
-        HYPERPLATFORM_LOG_DEBUG_SAFE(
-            "R= ---------------- (----------------), D= %p (%p), T= E",
-            fault_va, fault_base);
-      } else if (is_interrupt || src_addr != return_address) {
-        const auto src_base = UtilPcToFileHeader(src_addr);
-        HYPERPLATFORM_LOG_INFO_SAFE("S= %p (%p), D= %p (%p), T= E", src_addr,
-                                    src_base, fault_va, fault_base);
-      } else {
-        const auto return_base = UtilPcToFileHeader(return_address);
-        HYPERPLATFORM_LOG_INFO_SAFE("R= %p (%p), D= %p (%p), T= E",
-                                    return_address, return_base, fault_va,
-                                    fault_base);
-      }
+    if (!RweIsInsideSrcRange(return_address)) {
+      return;
     }
-#endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE)
+    const auto fault_base = UtilPcToFileHeader(fault_va);
+    const auto is_interrupt = g_rewp_int_handlers.has(fault_va);
+    const auto src_addr = (is_interrupt)
+                              ? return_address
+                              : RwepFindSourceAddressForExec(return_address);
+
+    if (!src_addr) {
+      HYPERPLATFORM_LOG_DEBUG_SAFE(
+          "R= ---------------- (----------------), D= %p (%p), T= E", fault_va,
+          fault_base);
+    } else if (is_interrupt || src_addr != return_address) {
+      const auto src_base = UtilPcToFileHeader(src_addr);
+      HYPERPLATFORM_LOG_INFO_SAFE("S= %p (%p), D= %p (%p), T= E", src_addr,
+                                  src_base, fault_va, fault_base);
+    } else {
+      const auto return_base = UtilPcToFileHeader(return_address);
+      HYPERPLATFORM_LOG_INFO_SAFE("R= %p (%p), D= %p (%p), T= E",
+                                  return_address, return_base, fault_va,
+                                  fault_base);
+    }
   }
 }
 
@@ -506,12 +438,12 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   processor_data->rwe_data->last_data.fault_va = fault_va;
   processor_data->rwe_data->last_data.ept_entry = ept_entry;
   if (is_write) {
-#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
-    RwepContextCopyMemory(
-        processor_data->rwe_data->last_data.old_bytes.data(),
-        reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(fault_va) & ~0xf),
-        processor_data->rwe_data->last_data.old_bytes.size());
-#endif
+    if (!MemTraceIsEnabled()) {
+      RwepContextCopyMemory(
+          processor_data->rwe_data->last_data.old_bytes.data(),
+          reinterpret_cast<void*>(reinterpret_cast<ULONG_PTR>(fault_va) & ~0xf),
+          processor_data->rwe_data->last_data.old_bytes.size());
+    }
   } else {
     processor_data->rwe_data->last_data.old_bytes.fill(0);
   }
@@ -549,193 +481,6 @@ _Use_decl_annotations_ static NTSTATUS RwepBytesToString(char* buffer,
   return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_ static bool RwepGetValueFromRegister(
-    GpRegisters* gp_regs, x86_reg reg, ULONG64* value) {
-  // Covers registers that are likely to be used. It is not comprehensive and
-  // does not includes all possible registers.
-  ULONG64 val = 0;
-  switch (reg) {
-    // clang-format off
-    case X86_REG_AL:  val = gp_regs->ax & UINT8_MAX; break;
-    case X86_REG_AH:  val = (gp_regs->ax >> 8) & UINT8_MAX; break;
-    case X86_REG_AX:  val = gp_regs->ax & UINT16_MAX; break;
-    case X86_REG_EAX: val = gp_regs->ax & UINT32_MAX; break;
-    case X86_REG_RAX: val = gp_regs->ax; break;
-
-    case X86_REG_BL:  val = gp_regs->bx & UINT8_MAX; break;
-    case X86_REG_BH:  val = (gp_regs->bx >> 8) & UINT8_MAX; break;
-    case X86_REG_BX:  val = gp_regs->bx & UINT16_MAX; break;
-    case X86_REG_EBX: val = gp_regs->bx & UINT32_MAX; break;
-    case X86_REG_RBX: val = gp_regs->bx; break;
-
-    case X86_REG_CL:  val = gp_regs->cx & UINT8_MAX; break;
-    case X86_REG_CH:  val = (gp_regs->cx >> 8) & UINT8_MAX; break;
-    case X86_REG_CX:  val = gp_regs->cx & UINT16_MAX; break;
-    case X86_REG_ECX: val = gp_regs->cx & UINT32_MAX; break;
-    case X86_REG_RCX: val = gp_regs->cx; break;
-
-    case X86_REG_DL:  val = gp_regs->dx & UINT8_MAX; break;
-    case X86_REG_DH:  val = (gp_regs->dx >> 8) & UINT8_MAX; break;
-    case X86_REG_DX:  val = gp_regs->dx & UINT16_MAX; break;
-    case X86_REG_EDX: val = gp_regs->dx & UINT32_MAX; break;
-    case X86_REG_RDX: val = gp_regs->dx; break;
-
-    case X86_REG_DIL: val = gp_regs->di & UINT8_MAX; break;
-    case X86_REG_DI:  val = gp_regs->di & UINT16_MAX; break;
-    case X86_REG_EDI: val = gp_regs->di & UINT32_MAX; break;
-    case X86_REG_RDI: val = gp_regs->di; break;
-
-    case X86_REG_SIL: val = gp_regs->si & UINT8_MAX; break;
-    case X86_REG_SI:  val = gp_regs->si & UINT16_MAX; break;
-    case X86_REG_ESI: val = gp_regs->si & UINT32_MAX; break;
-    case X86_REG_RSI: val = gp_regs->si; break;
-
-    case X86_REG_BPL: val = gp_regs->r15 & UINT8_MAX; break;
-    case X86_REG_BP:  val = gp_regs->r15 & UINT16_MAX; break;
-    case X86_REG_EBP: val = gp_regs->r15 & UINT32_MAX; break;
-    case X86_REG_RBP: val = gp_regs->r15; break;
-
-    case X86_REG_R8B: val = gp_regs->r8 & UINT8_MAX; break;
-    case X86_REG_R8W: val = gp_regs->r8 & UINT16_MAX; break;
-    case X86_REG_R8D: val = gp_regs->r8 & UINT32_MAX; break;
-    case X86_REG_R8:  val = gp_regs->r8; break;
-
-    case X86_REG_R9B: val = gp_regs->r9 & UINT8_MAX; break;
-    case X86_REG_R9W: val = gp_regs->r9 & UINT16_MAX; break;
-    case X86_REG_R9D: val = gp_regs->r9 & UINT32_MAX; break;
-    case X86_REG_R9:  val = gp_regs->r9; break;
-
-    case X86_REG_R10B: val = gp_regs->r10 & UINT8_MAX; break;
-    case X86_REG_R10W: val = gp_regs->r10 & UINT16_MAX; break;
-    case X86_REG_R10D: val = gp_regs->r10 & UINT32_MAX; break;
-    case X86_REG_R10:  val = gp_regs->r10; break;
-
-    case X86_REG_R11B: val = gp_regs->r11 & UINT8_MAX; break;
-    case X86_REG_R11W: val = gp_regs->r11 & UINT16_MAX; break;
-    case X86_REG_R11D: val = gp_regs->r11 & UINT32_MAX; break;
-    case X86_REG_R11:  val = gp_regs->r11; break;
-
-    case X86_REG_R12B: val = gp_regs->r12 & UINT8_MAX; break;
-    case X86_REG_R12W: val = gp_regs->r12 & UINT16_MAX; break;
-    case X86_REG_R12D: val = gp_regs->r12 & UINT32_MAX; break;
-    case X86_REG_R12:  val = gp_regs->r12; break;
-
-    case X86_REG_R13B: val = gp_regs->r13 & UINT8_MAX; break;
-    case X86_REG_R13W: val = gp_regs->r13 & UINT16_MAX; break;
-    case X86_REG_R13D: val = gp_regs->r13 & UINT32_MAX; break;
-    case X86_REG_R13:  val = gp_regs->r13; break;
-
-    case X86_REG_R14B: val = gp_regs->r14 & UINT8_MAX; break;
-    case X86_REG_R14W: val = gp_regs->r14 & UINT16_MAX; break;
-    case X86_REG_R14D: val = gp_regs->r14 & UINT32_MAX; break;
-    case X86_REG_R14:  val = gp_regs->r14; break;
-
-    case X86_REG_R15B: val = gp_regs->r15 & UINT8_MAX; break;
-    case X86_REG_R15W: val = gp_regs->r15 & UINT16_MAX; break;
-    case X86_REG_R15D: val = gp_regs->r15 & UINT32_MAX; break;
-    case X86_REG_R15:  val = gp_regs->r15; break;
-    // clang-format on
-
-    default:
-      return false;
-  }
-
-  *value = val;
-  return true;
-}
-
-_Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
-                                                    GpRegisters* gp_regs,
-                                                    bool is_write,
-                                                    ULONG64* value,
-                                                    SIZE_T* size) {
-  bool result = false;
-
-  // NT_ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
-
-  csh handle = {};
-  if (cs_open(CS_ARCH_X86, (sizeof(void*) == 4) ? CS_MODE_32 : CS_MODE_64,
-              &handle) != CS_ERR_OK) {
-    return result;
-  }
-
-  if (cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK) {
-    cs_close(&handle);
-    return result;
-  }
-
-  const auto current_cr3 = __readcr3();
-  const auto guest_cr3 = UtilVmRead(VmcsField::kGuestCr3);
-  __writecr3(guest_cr3);
-
-  cs_insn* instructions = {};
-  auto count = cs_disasm(handle, (uint8_t*)address, 15, (uint64_t)address, 0,
-                         &instructions);
-
-  __writecr3(current_cr3);
-  if (count == 0) {
-    cs_close(&handle);
-    return result;
-  }
-
-  const auto& inst = instructions[0];
-  HYPERPLATFORM_LOG_DEBUG_SAFE("%s %s", inst.mnemonic, inst.op_str);
-
-  if (is_write) {
-    switch (inst.id) {
-      case X86_INS_MOV:
-      case X86_INS_STOSB:
-      case X86_INS_STOSD:
-      case X86_INS_STOSQ:
-      case X86_INS_STOSW:
-        break;
-      default:
-        goto exit;
-    }
-
-    if (inst.detail->x86.op_count != 2) {
-      goto exit;
-    }
-
-    const auto& second_operand = inst.detail->x86.operands[1];
-    if (second_operand.type == X86_OP_REG &&
-        RwepGetValueFromRegister(gp_regs, second_operand.reg, value)) {
-      *size = second_operand.size;
-    } else if (second_operand.type == X86_OP_IMM) {
-      *value = second_operand.imm;
-      *size = second_operand.size;
-    } else {
-      goto exit;
-    }
-  } else {
-    switch (inst.id) {
-      case X86_INS_MOV:
-        break;
-      default:
-        goto exit;
-    }
-
-    if (inst.detail->x86.op_count != 2) {
-      goto exit;
-    }
-
-    const auto& first_operand = inst.detail->x86.operands[0];
-    if (first_operand.type == X86_OP_REG &&
-        RwepGetValueFromRegister(gp_regs, first_operand.reg, value)) {
-      *size = first_operand.size;
-    } else {
-      goto exit;
-    }
-  }
-
-  result = true;
-
-exit:;
-  cs_free(instructions, count);
-  cs_close(&handle);
-  return result;
-}
-
 _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
     ProcessorData* processor_data, GpRegisters* gp_regs) {
   NT_ASSERT(processor_data->rwe_data->last_data.ept_entry);
@@ -757,65 +502,46 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
       UtilPcToFileHeader(processor_data->rwe_data->last_data.fault_va);
 
   if (processor_data->rwe_data->last_data.is_write) {
-#if !defined(MEMORYMON_ENABLE_MMIO_TRACE)
-    static const auto kBinaryStringSize =
-        kRwepNumOfMonitoredBytesForWrite * 3 + 1;
+    if (!MemTraceIsEnabled()) {
+      static const auto kBinaryStringSize =
+          kRwepNumOfMonitoredBytesForWrite * 3 + 1;
 
-    UCHAR new_bytes[kRwepNumOfMonitoredBytesForWrite];
-    RwepContextCopyMemory(
-        new_bytes, reinterpret_cast<void*>(
-                       reinterpret_cast<ULONG_PTR>(
-                           processor_data->rwe_data->last_data.fault_va) &
-                       ~0xf),
-        sizeof(new_bytes));
+      UCHAR new_bytes[kRwepNumOfMonitoredBytesForWrite];
+      RwepContextCopyMemory(
+          new_bytes, reinterpret_cast<void*>(
+                         reinterpret_cast<ULONG_PTR>(
+                             processor_data->rwe_data->last_data.fault_va) &
+                         ~0xf),
+          sizeof(new_bytes));
 
-    char new_bytes_string[kBinaryStringSize];
-    RwepBytesToString(new_bytes_string, sizeof(new_bytes_string), new_bytes,
-                      sizeof(new_bytes));
+      char new_bytes_string[kBinaryStringSize];
+      RwepBytesToString(new_bytes_string, sizeof(new_bytes_string), new_bytes,
+                        sizeof(new_bytes));
 
-    char old_bytes_string[kBinaryStringSize];
-    RwepBytesToString(old_bytes_string, sizeof(old_bytes_string),
-                      processor_data->rwe_data->last_data.old_bytes.data(),
-                      processor_data->rwe_data->last_data.old_bytes.size());
+      char old_bytes_string[kBinaryStringSize];
+      RwepBytesToString(old_bytes_string, sizeof(old_bytes_string),
+                        processor_data->rwe_data->last_data.old_bytes.data(),
+                        processor_data->rwe_data->last_data.old_bytes.size());
 
-    HYPERPLATFORM_LOG_INFO_SAFE(
-        "S= %p (%p), D= %p (%p), T= W, %s => %s",
-        processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
-        processor_data->rwe_data->last_data.fault_va, fault_va_base,
-        old_bytes_string, new_bytes_string);
-#else
-    HYPERPLATFORM_LOG_INFO_SAFE(
-        "S= %p (%p), D= %p (%p), T= W",
-        processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
-        processor_data->rwe_data->last_data.fault_va, fault_va_base);
-#endif)
+      HYPERPLATFORM_LOG_INFO_SAFE(
+          "S= %p (%p), D= %p (%p), T= W, %s => %s",
+          processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
+          processor_data->rwe_data->last_data.fault_va, fault_va_base,
+          old_bytes_string, new_bytes_string);
+    } else {
+      HYPERPLATFORM_LOG_INFO_SAFE(
+          "S= %p (%p), D= %p (%p), T= W",
+          processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
+          processor_data->rwe_data->last_data.fault_va, fault_va_base);
+    }
   } else {
     HYPERPLATFORM_LOG_INFO_SAFE(
         "S= %p (%p), D= %p (%p), T= R",
         processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
         processor_data->rwe_data->last_data.fault_va, fault_va_base);
   }
-
-#if defined(MEMORYMON_ENABLE_MMIO_TRACE)
-  ULONG64 value = 0;
-  SIZE_T size = 0;
-  if (RwepGetMmIoValue(processor_data->rwe_data->last_data.guest_ip, gp_regs,
-                       processor_data->rwe_data->last_data.is_write, &value,
-                       &size)) {
-    // clang-format off
-    switch (size) {
-    case 1: HYPERPLATFORM_LOG_INFO_SAFE("Value= %02x", value & UINT8_MAX); break;
-    case 2: HYPERPLATFORM_LOG_INFO_SAFE("Value= %04x", value & UINT16_MAX); break;
-    case 4: HYPERPLATFORM_LOG_INFO_SAFE("Value= %08x", value & UINT32_MAX); break;
-    case 8: HYPERPLATFORM_LOG_INFO_SAFE("Value= %016llx", value); break;
-    default: HYPERPLATFORM_COMMON_DBG_BREAK(); break;
-    }
-    // clang-format on
-  } else {
-    // Failed to get value. Most likely due to unsupported instruction
-    HYPERPLATFORM_COMMON_DBG_BREAK();
-  }
-#endif  // defined(MEMORYMON_ENABLE_MMIO_TRACE
+  MemTraceHandleReadWrite(processor_data->rwe_data->last_data.guest_ip, gp_regs,
+                          processor_data->rwe_data->last_data.is_write);
 
   processor_data->rwe_data->last_data.is_write = false;
   processor_data->rwe_data->last_data.guest_ip = 0;

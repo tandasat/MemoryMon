@@ -150,6 +150,8 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\vm.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\vmm.cpp" />
     <ClCompile Include="AddressRanges.cpp" />
+    <ClCompile Include="InterruptHandlers.cpp" />
+    <ClCompile Include="mem_trace.cpp" />
     <ClCompile Include="page_fault.cpp" />
     <ClCompile Include="PageFaultRecord.cpp" />
     <ClCompile Include="rwe.cpp" />
@@ -165,7 +167,6 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\ept.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\global_object.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\ia32_type.h" />
-    <ClInclude Include="..\HyperPlatform\HyperPlatform\kernel_stl.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\log.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\performance.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\perf_counter.h" />
@@ -175,6 +176,8 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vm.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\vmm.h" />
     <ClInclude Include="AddressRanges.h" />
+    <ClInclude Include="InterruptHandlers.h" />
+    <ClInclude Include="mem_trace.h" />
     <ClInclude Include="page_fault.h" />
     <ClInclude Include="PageFaultRecord.h" />
     <ClInclude Include="rwe.h" />

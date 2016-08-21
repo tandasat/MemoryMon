@@ -1,0 +1,8 @@
+- mmio: Logs does not work if DebugInfo level was specified
+- mmio: Occasional hang with real machine
+- mmio: system hang with multi-processor system
+- unloading (de-virtualizing) occasionally leads to crash (bugcheck)
+- documents need update w.r.t STL
+- mmio: full-source to specific dest
+- mmio: full-dest from specific src
+

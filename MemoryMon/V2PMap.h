@@ -9,7 +9,8 @@
 #define MEMORYMON_V2PMAP_H_
 
 #include <fltKernel.h>
-#include "../HyperPlatform/HyperPlatform/kernel_stl.h"
+#undef _HAS_EXCEPTIONS
+#define _HAS_EXCEPTIONS 0
 #include <vector>
 
 ////////////////////////////////////////////////////////////////////////////////
