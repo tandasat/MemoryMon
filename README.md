@@ -21,7 +21,7 @@ Installation and Uninstallation
 Clone full source code from Github with below command and compile it with Visual
 Studio 2015.
 
-    $ git clone --recursive git@github.com:tandasat/MemoryMon.git
+    $ git clone --recursive https://github.com/tandasat/MemoryMon.git
 
 On the x64 platform, you have to enable test signing to install the driver.
 To do that, open the command prompt with the administrator privilege and type
