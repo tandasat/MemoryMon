@@ -11,6 +11,7 @@
 #include "../HyperPlatform/HyperPlatform/log.h"
 #include "../HyperPlatform/HyperPlatform/util.h"
 #include <capstone.h>
+#include "../capstone/windows/winkernel_mm.h"
 
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
@@ -28,24 +29,54 @@ extern "C" {
 // types
 //
 
+static const auto kMemTracepMetadataSize = sizeof(UCHAR) + sizeof(SIZE_T);
+
+#include <pshpack1.h>
+struct MemoryChunk {
+  BOOLEAN used;
+  SIZE_T size;
+  UCHAR data[256 - kMemTracepMetadataSize];
+};
+static_assert(sizeof(MemoryChunk) == 256, "Size check");
+
+struct MemoryChunkLarge {
+  BOOLEAN used;
+  SIZE_T size;
+  UCHAR data[PAGE_SIZE * 4 - kMemTracepMetadataSize];
+};
+static_assert(sizeof(MemoryChunkLarge) == PAGE_SIZE * 4, "Size check");
+#include <poppack.h>
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // prototypes
 //
 
-_Success_(return ) static bool RwepGetMmIoValue(_In_ void* address,
-                                                _In_ GpRegisters* gp_regs,
-                                                _In_ bool is_write,
-                                                _Out_ ULONG64* value,
-                                                _Out_ SIZE_T* size);
+static void* CAPSTONE_API MemTracep_realloc(_In_opt_ void* ptr,
+                                            _In_ size_t size);
 
-_Success_(return ) static bool RwepGetValueFromRegister(
+static void CAPSTONE_API MemTracep_free(_In_opt_ void* ptr);
+
+static void* CAPSTONE_API MemTracep_malloc(_In_ size_t size);
+
+_Success_(return ) static bool MemTracepGetMmIoValue(_In_ void* address,
+                                                     _In_ GpRegisters* gp_regs,
+                                                     _In_ bool is_write,
+                                                     _Out_ ULONG64* value,
+                                                     _Out_ SIZE_T* size);
+
+_Success_(return ) static bool MemTracepGetValueFromRegister(
     _Inout_ GpRegisters* gp_regs, _In_ x86_reg reg, _Out_ ULONG64* value);
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 // variables
 //
+
+static MemoryChunk g_memtracep_memory[320];             // 80K, 20 pages
+static MemoryChunkLarge g_memtracep_memory_large[10];   // 40K, 10 pages
+static BOOLEAN g_memtracep_initialized;
+static KSPIN_LOCK g_memtracep_spinlock;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -83,7 +114,7 @@ _Use_decl_annotations_ bool MemTraceHandleReadWrite(void* guest_ip,
 
   ULONG64 value = 0;
   SIZE_T size = 0;
-  if (RwepGetMmIoValue(guest_ip, gp_regs, is_write, &value, &size)) {
+  if (MemTracepGetMmIoValue(guest_ip, gp_regs, is_write, &value, &size)) {
     // clang-format off
     switch (size) {
       case 1: HYPERPLATFORM_LOG_INFO_SAFE("Value= %02x", value & UINT8_MAX); break;
@@ -102,14 +133,93 @@ _Use_decl_annotations_ bool MemTraceHandleReadWrite(void* guest_ip,
   return true;
 }
 
-_Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
-                                                    GpRegisters* gp_regs,
-                                                    bool is_write,
-                                                    ULONG64* value,
-                                                    SIZE_T* size) {
+// free()
+_Use_decl_annotations_ static void CAPSTONE_API MemTracep_free(void* ptr) {
+  if (ptr) {
+    CONTAINING_RECORD(ptr, MemoryChunk, data)->used = FALSE;
+  }
+}
+
+// malloc()
+_Use_decl_annotations_ static void* CAPSTONE_API MemTracep_malloc(size_t size) {
+  // Disallow zero length allocation because they waste pool header space and,
+  // in many cases, indicate a potential validation issue in the calling code.
+  NT_ASSERT(size);
+
+  if (!g_memtracep_initialized) {
+    KeInitializeSpinLock(&g_memtracep_spinlock);
+    g_memtracep_initialized = TRUE;
+  }
+
+  NT_ASSERT(size < PAGE_SIZE * 4);
+
+  MemoryChunk* chunk = nullptr;
+  KLOCK_QUEUE_HANDLE handle = {};
+  KeAcquireInStackQueuedSpinLockAtDpcLevel(&g_memtracep_spinlock, &handle);
+  if (size > sizeof(chunk->data)) {
+    for (auto& entry : g_memtracep_memory_large) {
+      if (!entry.used) {
+        entry.used = TRUE;
+        chunk = reinterpret_cast<MemoryChunk*>(&entry);
+        break;
+      }
+    }
+  } else {
+    for (auto& entry : g_memtracep_memory) {
+      if (!entry.used) {
+        entry.used = TRUE;
+        chunk = &entry;
+        break;
+      }
+    }
+  }
+  KeReleaseInStackQueuedSpinLockFromDpcLevel(&handle);
+  NT_ASSERT(chunk);
+  return (chunk) ? chunk->data : nullptr;
+}
+
+// realloc()
+_Use_decl_annotations_ static void* CAPSTONE_API
+MemTracep_realloc(void* ptr, size_t size) {
+  void* new_ptr = NULL;
+  size_t current_size = 0;
+  size_t smaller_size = 0;
+
+  if (!ptr) {
+    return cs_winkernel_malloc(size);
+  }
+
+  new_ptr = cs_winkernel_malloc(size);
+  if (!new_ptr) {
+    return NULL;
+  }
+
+  current_size = CONTAINING_RECORD(ptr, MemoryChunk, data)->size;
+  smaller_size = (current_size < size) ? current_size : size;
+  RtlCopyMemory(new_ptr, ptr, smaller_size);
+  cs_winkernel_free(ptr);
+
+  return new_ptr;
+}
+
+_Use_decl_annotations_ static bool MemTracepGetMmIoValue(void* address,
+                                                         GpRegisters* gp_regs,
+                                                         bool is_write,
+                                                         ULONG64* value,
+                                                         SIZE_T* size) {
   bool result = false;
 
   // NT_ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+  cs_opt_mem setup;
+  setup.calloc = cs_winkernel_calloc;
+  setup.free = MemTracep_free;
+  setup.malloc = MemTracep_malloc;
+  setup.realloc = MemTracep_realloc;
+  setup.vsnprintf = cs_winkernel_vsnprintf;
+  if (cs_option(0, CS_OPT_MEM, reinterpret_cast<size_t>(&setup)) != CS_ERR_OK) {
+    return result;
+  }
 
   csh handle = {};
   if (cs_open(CS_ARCH_X86, (sizeof(void*) == 4) ? CS_MODE_32 : CS_MODE_64,
@@ -127,7 +237,7 @@ _Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
   __writecr3(guest_cr3);
 
   cs_insn* instructions = {};
-  auto count = cs_disasm(handle, (uint8_t*)address, 15, (uint64_t)address, 0,
+  auto count = cs_disasm(handle, (uint8_t*)address, 15, (uint64_t)address, 1,
                          &instructions);
 
   __writecr3(current_cr3);
@@ -157,7 +267,7 @@ _Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
 
     const auto& second_operand = inst.detail->x86.operands[1];
     if (second_operand.type == X86_OP_REG &&
-        RwepGetValueFromRegister(gp_regs, second_operand.reg, value)) {
+        MemTracepGetValueFromRegister(gp_regs, second_operand.reg, value)) {
       *size = second_operand.size;
     } else if (second_operand.type == X86_OP_IMM) {
       *value = second_operand.imm;
@@ -179,7 +289,7 @@ _Use_decl_annotations_ static bool RwepGetMmIoValue(void* address,
 
     const auto& first_operand = inst.detail->x86.operands[0];
     if (first_operand.type == X86_OP_REG &&
-        RwepGetValueFromRegister(gp_regs, first_operand.reg, value)) {
+        MemTracepGetValueFromRegister(gp_regs, first_operand.reg, value)) {
       *size = first_operand.size;
     } else {
       goto exit;
@@ -194,7 +304,7 @@ exit:;
   return result;
 }
 
-_Use_decl_annotations_ static bool RwepGetValueFromRegister(
+_Use_decl_annotations_ static bool MemTracepGetValueFromRegister(
     GpRegisters* gp_regs, x86_reg reg, ULONG64* value) {
   // Covers registers that are likely to be used. It is not comprehensive and
   // does not includes all possible registers.
