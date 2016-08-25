@@ -39,7 +39,9 @@ using GpRegisters = struct GpRegistersX86;
 
 bool MemTraceIsEnabled();
 
-bool MemTraceIsTargetAddress(_In_ ULONG64 pa);
+bool MemTraceIsTargetSrcAddress(_In_ const char* name);
+
+bool MemTraceIsTargetDstAddress(_In_ ULONG64 pa);
 
 _Success_(return ) bool MemTraceHandleReadWrite(_In_ void* guest_ip,
                                                 _Inout_ GpRegisters* gp_regs,

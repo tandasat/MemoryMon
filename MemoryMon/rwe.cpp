@@ -48,9 +48,6 @@ struct RweLastData {
   void* fault_va;
   EptCommonEntry* ept_entry;
   std::array<UCHAR, kRwepNumOfMonitoredBytesForWrite> old_bytes;
-
-  RweLastData()
-      : is_write(false), guest_ip(0), fault_va(0), ept_entry(nullptr) {}
 };
 
 struct RweData {
@@ -104,8 +101,8 @@ static bool RwepDstPageCallback(_In_ void* va, _In_ ULONG64 pa,
 static void* RwepFindSourceAddressForExec(_In_ void* return_addr);
 
 #if defined(ALLOC_PRAGMA)
-#pragma alloc_text(INIT, RweAllocData)
-#pragma alloc_text(INIT, RweSetDefaultEptAttributes)
+#pragma alloc_text(PAGE, RweAllocData)
+#pragma alloc_text(PAGE, RweSetDefaultEptAttributes)
 #pragma alloc_text(PAGE, RweFreeData)
 #pragma alloc_text(PAGE, RweApplyRanges)
 #endif
@@ -126,7 +123,12 @@ static InterruptHandlers g_rewp_int_handlers;
 
 _Use_decl_annotations_ RweData* RweAllocData() {
   PAGED_CODE();
-  return new RweData;
+  const auto data = new RweData;
+  data->last_data.is_write = false;
+  data->last_data.guest_ip = nullptr;
+  data->last_data.fault_va = nullptr;
+  data->last_data.ept_entry = nullptr;
+  return data;
 }
 
 _Use_decl_annotations_ void RweFreeData(RweData* rwe_data) {
@@ -193,7 +195,7 @@ _Use_decl_annotations_ void RweApplyRanges() {
 // Set a va associated with 0xfd5fa000 as a dest range
 _Use_decl_annotations_ void RweHandleNewDeviceMemoryAccess(ULONG64 pa,
                                                            void* va) {
-  if (MemTraceIsTargetAddress(pa)) {
+  if (MemTraceIsTargetDstAddress(pa)) {
     RweAddDstRange(PAGE_ALIGN(va), PAGE_SIZE);
   }
 }

@@ -142,6 +142,7 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\driver.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\ept.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\global_object.cpp" />
+    <ClCompile Include="..\HyperPlatform\HyperPlatform\hotplug_callback.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\kernel_stl.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\log.cpp" />
     <ClCompile Include="..\HyperPlatform\HyperPlatform\performance.cpp" />
@@ -166,6 +167,7 @@
     <ClInclude Include="..\HyperPlatform\HyperPlatform\driver.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\ept.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\global_object.h" />
+    <ClInclude Include="..\HyperPlatform\HyperPlatform\hotplug_callback.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\ia32_type.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\log.h" />
     <ClInclude Include="..\HyperPlatform\HyperPlatform\performance.h" />

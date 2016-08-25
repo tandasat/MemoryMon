@@ -253,9 +253,8 @@ _Use_decl_annotations_ static bool TestpForEachDriverCallback(
 
   const auto name = reinterpret_cast<const char*>(module.FullPathName) +
                     module.OffsetToFileName;
-  if (strcmp(name, "storahci.sys") == 0) {
+  if (MemTraceIsTargetSrcAddress(name)) {
     RweAddSrcRange(module.ImageBase, module.ImageSize);
-    return false;   // stop enumeration
   }
   return true;
 }

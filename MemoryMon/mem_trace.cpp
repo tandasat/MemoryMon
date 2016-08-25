@@ -73,8 +73,8 @@ _Success_(return ) static bool MemTracepGetValueFromRegister(
 // variables
 //
 
-static MemoryChunk g_memtracep_memory[320];             // 80K, 20 pages
-static MemoryChunkLarge g_memtracep_memory_large[10];   // 40K, 10 pages
+static MemoryChunk g_memtracep_memory[320];            // 80K, 20 pages
+static MemoryChunkLarge g_memtracep_memory_large[10];  // 40K, 10 pages
 static BOOLEAN g_memtracep_initialized;
 static KSPIN_LOCK g_memtracep_spinlock;
 
@@ -91,17 +91,28 @@ static KSPIN_LOCK g_memtracep_spinlock;
 #endif
 }
 
-_Use_decl_annotations_ bool MemTraceIsTargetAddress(ULONG64 pa) {
+_Use_decl_annotations_ bool MemTraceIsTargetSrcAddress(const char* name) {
   if (!MemTraceIsEnabled()) {
     return false;
   }
 
-  //if (UtilIsInBounds(pa, 0xfd5fa000ull, 0xfd5fafffull)) {
+  if (strcmp(name, "storahci.sys") != 0) {
+    return false;
+  }
+  return true;
+}
+
+_Use_decl_annotations_ bool MemTraceIsTargetDstAddress(ULONG64 pa) {
+  if (!MemTraceIsEnabled()) {
+    return false;
+  }
+
+  // if (UtilIsInBounds(pa, 0xfd5fa000ull, 0xfd5fafffull)) {
   //  return true;
   //}
-  if (UtilIsInBounds(pa, 0xb0700000ull, 0xb0701fffull)) {
-    return true;
-  }
+  // if (UtilIsInBounds(pa, 0xb0700000ull, 0xb0701fffull)) {
+  //  return true;
+  //}
   return false;
 }
 

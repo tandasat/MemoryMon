@@ -84,6 +84,9 @@
     <ClCompile Include="..\HyperPlatform\HyperPlatform\power_callback.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\HyperPlatform\HyperPlatform\hotplug_callback.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\asm.h">
@@ -156,6 +159,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\HyperPlatform\HyperPlatform\power_callback.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\HyperPlatform\HyperPlatform\hotplug_callback.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
