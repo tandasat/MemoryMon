@@ -96,9 +96,9 @@ _Use_decl_annotations_ bool MemTraceIsTargetSrcAddress(const char* name) {
     return false;
   }
 
-  if (strcmp(name, "storahci.sys") != 0) {
-    return false;
-  }
+  //if (strcmp(name, "storahci.sys") != 0) {
+  //  return false;
+  //}
   return true;
 }
 
@@ -107,10 +107,10 @@ _Use_decl_annotations_ bool MemTraceIsTargetDstAddress(ULONG64 pa) {
     return false;
   }
 
-  // if (UtilIsInBounds(pa, 0xfd5fa000ull, 0xfd5fafffull)) {
+  //if (UtilIsInBounds(pa, 0xfd5fa000ull, 0xfd5fafffull)) {
   //  return true;
   //}
-  // if (UtilIsInBounds(pa, 0xb0700000ull, 0xb0701fffull)) {
+  //if (UtilIsInBounds(pa, 0xb0700000ull, 0xb0701fffull)) {
   //  return true;
   //}
   return false;

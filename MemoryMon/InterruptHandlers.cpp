@@ -63,8 +63,6 @@ InterruptHandlers::InterruptHandlers() {
   __sidt(&idtr);
 
   const auto entries = reinterpret_cast<IDTENTRY64*>(idtr.base);
-  NT_ASSERT(entries);
-
   for (auto i = 0ul; i < handlers.size(); ++i) {
     const auto high = static_cast<ULONG_PTR>(entries[i].OffsetHigh) << 32;
     const auto middle = static_cast<ULONG_PTR>(entries[i].OffsetMiddle) << 16;

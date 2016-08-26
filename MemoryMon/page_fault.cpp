@@ -42,12 +42,17 @@ __declspec(allocate(".asm")) static const UCHAR kPfpBreakPoint[] = {0xcc};
 // prototypes
 //
 
+#if defined(ALLOC_PRAGMA)
+#pragma alloc_text(PAGE, PfStopPageFaultHandling)
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // variables
 //
 
 static PageFaultRecord g_pfp_record;
+static bool g_pfp_stop_handling;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -57,6 +62,9 @@ static PageFaultRecord g_pfp_record;
 // Change guest's IP to kPfpBreakPoint up on #PF on kernel address space
 // so that #BP VM-exit occurs on completion of #PF handler
 _Use_decl_annotations_ bool PfHandlePageFault(void* guest_ip) {
+  if (g_pfp_stop_handling) {
+    return false;
+  }
   if (g_pfp_record.has(PsGetCurrentThread())) {
     return false;
   }
@@ -78,6 +86,14 @@ _Use_decl_annotations_ bool PfHandleBreakpoint(void* guest_ip) {
   NT_ASSERT(last_ip);
   UtilVmWrite(VmcsField::kGuestRip, reinterpret_cast<ULONG_PTR>(last_ip));
   return true;
+}
+
+//
+_Use_decl_annotations_ void PfStopPageFaultHandling() {
+  PAGED_CODE();
+
+  g_pfp_stop_handling = true;
+  UtilSleep(1000);
 }
 
 }  // extern "C"

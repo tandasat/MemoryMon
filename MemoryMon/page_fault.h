@@ -31,9 +31,12 @@ extern "C" {
 // prototypes
 //
 
-bool PfHandlePageFault(_In_ void* guest_ip);
+_IRQL_requires_min_(DISPATCH_LEVEL) bool PfHandlePageFault(_In_ void* guest_ip);
 
-bool PfHandleBreakpoint(_In_ void* guest_ip);
+_IRQL_requires_min_(DISPATCH_LEVEL) bool PfHandleBreakpoint(
+    _In_ void* guest_ip);
+
+_IRQL_requires_max_(PASSIVE_LEVEL) void PfStopPageFaultHandling();
 
 ////////////////////////////////////////////////////////////////////////////////
 //

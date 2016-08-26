@@ -556,7 +556,9 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
 // monitor pages
 _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
                                                        void* context) {
-  NT_ASSERT(context);
+  if (!context) {
+    return false;
+  }
 
   if (!pa) {
     HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
@@ -581,7 +583,9 @@ _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
 // Make dest ranges non-readable/writable/executable for monitor pages
 _Use_decl_annotations_ static bool RwepDstPageCallback(void* va, ULONG64 pa,
                                                        void* context) {
-  NT_ASSERT(context);
+  if (!context) {
+    return false;
+  }
 
   if (!pa) {
     HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);

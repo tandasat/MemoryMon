@@ -116,7 +116,9 @@ _Use_decl_annotations_ void TestRwe() {
   // by PA for testing purpose.
   const auto pagable_test_page = reinterpret_cast<UCHAR*>(
       ExAllocatePoolWithTag(PagedPool, PAGE_SIZE, kHyperPlatformCommonPoolTag));
-  NT_ASSERT(pagable_test_page);
+  if (!pagable_test_page) {
+    return;
+  }
   RtlZeroMemory(pagable_test_page, PAGE_SIZE);
   RweAddDstRange(pagable_test_page, PAGE_SIZE);
 
