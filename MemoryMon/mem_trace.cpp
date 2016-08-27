@@ -96,9 +96,15 @@ _Use_decl_annotations_ bool MemTraceIsTargetSrcAddress(const char* name) {
     return false;
   }
 
-  //if (strcmp(name, "storahci.sys") != 0) {
-  //  return false;
-  //}
+  // Do not support session address space. MemoryMon is unable to address PA of
+  // such VA since MemoryMon runs in context of SYSTEM which is not associated
+  // with any session,
+  if (strcmp(name, "cdd.dll") == 0 ||
+      strcmp(name, "win32k.sys") == 0 || strcmp(name, "win32kbase.sys") == 0 ||
+      strcmp(name, "win32kfull.sys") == 0) {
+    return false;
+  }
+
   return true;
 }
 
@@ -107,10 +113,15 @@ _Use_decl_annotations_ bool MemTraceIsTargetDstAddress(ULONG64 pa) {
     return false;
   }
 
-  //if (UtilIsInBounds(pa, 0xfd5fa000ull, 0xfd5fafffull)) {
+  static const auto kSataAhciControlerVMware = 0xfd5fa000ull;
+  static const auto kSataAhciControlerHost = 0xb0700000ull;
+  if (UtilIsInBounds(pa, 0xFD3A0000ull, 0xFD3FFFFFull)) {
+    return true;
+  }
+  //if (UtilIsInBounds(pa, kSataAhciControlerVMware, kSataAhciControlerVMware + 0xfff)) {
   //  return true;
   //}
-  //if (UtilIsInBounds(pa, 0xb0700000ull, 0xb0701fffull)) {
+  // if (UtilIsInBounds(pa, kSataAhciControlerHost, kSataAhciControlerHost + 0xfff)) {
   //  return true;
   //}
   return false;

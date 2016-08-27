@@ -13,6 +13,10 @@
 #include "../HyperPlatform/HyperPlatform/util.h"
 #include "../HyperPlatform/HyperPlatform/ept.h"
 #include "../HyperPlatform/HyperPlatform/vmm.h"
+#ifndef HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
+#define HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER 1
+#endif  // HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
+#include "../HyperPlatform/HyperPlatform/performance.h"
 #include "V2PMap.h"
 #include "AddressRanges.h"
 #include "InterruptHandlers.h"
@@ -58,7 +62,6 @@ struct RweSharedData {
   AddressRanges src_ranges;
   AddressRanges dst_ranges;
   V2PMap2 v2p_map;
-  bool applied;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -153,10 +156,12 @@ _Use_decl_annotations_ void RweAddDstRange(void* address, SIZE_T size) {
 }
 
 _Use_decl_annotations_ bool RweIsInsideSrcRange(void* address) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   return g_rwep_shared_data.src_ranges.is_in_range(address);
 }
 
 _Use_decl_annotations_ bool RweIsInsideDstRange(void* address) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   return g_rwep_shared_data.dst_ranges.is_in_range(address);
 }
 
@@ -279,8 +284,20 @@ _Use_decl_annotations_ static void* RwepFindSourceAddressForExec(
 
 _Use_decl_annotations_ static void RwepHandleExecuteViolation(
     ProcessorData* processor_data, void* fault_va) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
+
   if (RweIsInsideSrcRange(fault_va)) {
     // Someone is entering a source range
+    // NT_ASSERT(processor_data->ept_data == processor_data->ept_data_normal);
+
+    // Sometimes the address is not marked as executable for some reasons
+    if (processor_data->ept_data != processor_data->ept_data_normal) {
+      HYPERPLATFORM_COMMON_DBG_BREAK();
+      const auto ept_entry =
+          EptGetEptPtEntry(processor_data->ept_data,
+                           UtilVmRead64(VmcsField::kGuestPhysicalAddress));
+      ept_entry->fields.execute_access = true;
+    }
 
     // Currently
     //        E   RW
@@ -327,6 +344,7 @@ _Use_decl_annotations_ static void RwepHandleExecuteViolation(
 
   } else {
     // Presumably, someone is leaving a source range
+    NT_ASSERT(processor_data->ept_data == processor_data->ept_data_monitor);
 
     // Currently
     //        E   RW
@@ -408,10 +426,12 @@ _Use_decl_annotations_ static void* RwepContextCopyMemory(void* destination,
 _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
     ProcessorData* processor_data, void* guest_ip, void* fault_va,
     bool is_write) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   NT_ASSERT(!processor_data->rwe_data->last_data.ept_entry);
 
   // Read or write from a source range to a dest range
   NT_ASSERT(RweIsInsideSrcRange(guest_ip));
+  NT_ASSERT(processor_data->ept_data == processor_data->ept_data_monitor);
 
   // Currently
   //        E   RW
@@ -454,6 +474,7 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
 _Use_decl_annotations_ void RweHandleEptViolation(
     ProcessorData* processor_data, void* guest_ip, void* fault_va,
     bool read_violation, bool write_violation, bool execute_violation) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   if (execute_violation) {
     RwepHandleExecuteViolation(processor_data, fault_va);
   } else if (read_violation || write_violation) {
@@ -485,6 +506,7 @@ _Use_decl_annotations_ static NTSTATUS RwepBytesToString(char* buffer,
 
 _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
     ProcessorData* processor_data, GpRegisters* gp_regs) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
   NT_ASSERT(processor_data->rwe_data->last_data.ept_entry);
 
   // Revert to
@@ -561,7 +583,8 @@ _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
   }
 
   if (!pa) {
-    HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
+    UNREFERENCED_PARAMETER(va);
+    // HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
   }
 
@@ -575,8 +598,10 @@ _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
       EptGetEptPtEntry(processor_data->ept_data_monitor, pa);
   ept_entry_m->fields.execute_access = true;
 
-  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RW- D:RWE O:RWE %p", PAGE_ALIGN(va));
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p", PAGE_ALIGN(va));
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RW- D:RWE O:RWE %p",
+  // PAGE_ALIGN(va));
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
+  // PAGE_ALIGN(va));
   return true;
 }
 
@@ -588,7 +613,8 @@ _Use_decl_annotations_ static bool RwepDstPageCallback(void* va, ULONG64 pa,
   }
 
   if (!pa) {
-    HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
+    UNREFERENCED_PARAMETER(va);
+    // HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
   }
 
@@ -597,24 +623,30 @@ _Use_decl_annotations_ static bool RwepDstPageCallback(void* va, ULONG64 pa,
   ept_entry->fields.execute_access = false;
   ept_entry->fields.write_access = false;
   ept_entry->fields.read_access = false;
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p", PAGE_ALIGN(va));
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p",
+  // PAGE_ALIGN(va));
   return true;
 }
 
 // Apply ranges to EPT attributes
 _Use_decl_annotations_ void RweVmcallApplyRanges(
     ProcessorData* processor_data) {
-  NT_ASSERT(processor_data->ept_data == processor_data->ept_data_normal);
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
+
+  // Make sure no EPT entry is in a temporary state. Hence updating EPT entries
+  // do not cause confusion.
+  NT_ASSERT(!processor_data->rwe_data->last_data.ept_entry);
 
   g_rwep_shared_data.src_ranges.for_each_page(RwepSrcPageCallback,
                                               processor_data);
   g_rwep_shared_data.dst_ranges.for_each_page(RwepDstPageCallback,
                                               processor_data);
-  g_rwep_shared_data.applied = true;
   UtilInveptAll();
 }
 
 _Use_decl_annotations_ void RweHandleTlbFlush(ProcessorData* processor_data) {
+  HYPERPLATFORM_PERFORMANCE_MEASURE_THIS_SCOPE();
+
   if (g_rwep_shared_data.v2p_map.refresh(processor_data)) {
     UtilForEachProcessorDpc(RwepApplyRangesDpcRoutine, nullptr);
   }

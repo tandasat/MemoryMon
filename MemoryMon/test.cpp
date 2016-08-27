@@ -92,6 +92,7 @@ _Use_decl_annotations_ void TestRwe() {
   if (MemTraceIsEnabled()) {
     TestpForEachDriver(TestpForEachDriverCallback, nullptr);
     RweApplyRanges();
+    HYPERPLATFORM_COMMON_DBG_BREAK();
     HYPERPLATFORM_LOG_INFO("Enabled.");
     return;
   }
