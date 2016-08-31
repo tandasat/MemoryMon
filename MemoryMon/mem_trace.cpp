@@ -105,7 +105,8 @@ _Use_decl_annotations_ bool MemTraceIsTargetSrcAddress(const char* name) {
     return false;
   }
 
-  return true;
+  return false;
+  //return true;
 }
 
 _Use_decl_annotations_ bool MemTraceIsTargetDstAddress(ULONG64 pa) {
@@ -115,13 +116,13 @@ _Use_decl_annotations_ bool MemTraceIsTargetDstAddress(ULONG64 pa) {
 
   static const auto kSataAhciControlerVMware = 0xfd5fa000ull;
   static const auto kSataAhciControlerHost = 0xb0700000ull;
-  if (UtilIsInBounds(pa, 0xFD3A0000ull, 0xFD3FFFFFull)) {
-    return true;
-  }
+  //if (UtilIsInBounds(pa, 0xFD3A0000ull, 0xFD3FFFFFull)) {
+  //  return true;
+  //}
   //if (UtilIsInBounds(pa, kSataAhciControlerVMware, kSataAhciControlerVMware + 0xfff)) {
   //  return true;
   //}
-  // if (UtilIsInBounds(pa, kSataAhciControlerHost, kSataAhciControlerHost + 0xfff)) {
+  //if (UtilIsInBounds(pa, kSataAhciControlerHost, kSataAhciControlerHost + 0xfff)) {
   //  return true;
   //}
   return false;

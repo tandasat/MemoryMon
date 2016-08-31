@@ -222,7 +222,7 @@ _Use_decl_annotations_ static void RweSwtichToNormalMode(
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
   // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR => NORMAL");
-  UtilInveptAll();
+  UtilInveptGlobal();
 }
 
 _Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
@@ -231,7 +231,7 @@ _Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
   // HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL  => MONITOR");
-  UtilInveptAll();
+  UtilInveptGlobal();
 }
 
 _Use_decl_annotations_ static void* RwepFindSourceAddressForExec(
@@ -409,7 +409,7 @@ _Use_decl_annotations_ static void RewpSetReadWriteOnPage(
     bool allow_read_write, EptCommonEntry* ept_entry) {
   ept_entry->fields.write_access = allow_read_write;
   ept_entry->fields.read_access = allow_read_write;
-  UtilInveptAll();
+  UtilInveptGlobal();
 }
 
 _Use_decl_annotations_ static void* RwepContextCopyMemory(void* destination,
@@ -641,7 +641,7 @@ _Use_decl_annotations_ void RweVmcallApplyRanges(
                                               processor_data);
   g_rwep_shared_data.dst_ranges.for_each_page(RwepDstPageCallback,
                                               processor_data);
-  UtilInveptAll();
+  UtilInveptGlobal();
 }
 
 _Use_decl_annotations_ void RweHandleTlbFlush(ProcessorData* processor_data) {
