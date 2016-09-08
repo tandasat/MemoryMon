@@ -99,14 +99,18 @@ _Use_decl_annotations_ bool MemTraceIsTargetSrcAddress(const char* name) {
   // Do not support session address space. MemoryMon is unable to address PA of
   // such VA since MemoryMon runs in context of SYSTEM which is not associated
   // with any session,
-  if (strcmp(name, "cdd.dll") == 0 ||
-      strcmp(name, "win32k.sys") == 0 || strcmp(name, "win32kbase.sys") == 0 ||
+  if (strcmp(name, "cdd.dll") == 0 || strcmp(name, "win32k.sys") == 0 ||
+      strcmp(name, "win32kbase.sys") == 0 ||
       strcmp(name, "win32kfull.sys") == 0) {
     return false;
   }
 
+  // Sample target module
+  // if (strcmp(name, "stornvme.sys") == 0) {
+  //  return true;
+  //}
+
   return false;
-  //return true;
 }
 
 _Use_decl_annotations_ bool MemTraceIsTargetDstAddress(ULONG64 pa) {
@@ -114,15 +118,19 @@ _Use_decl_annotations_ bool MemTraceIsTargetDstAddress(ULONG64 pa) {
     return false;
   }
 
+  // Sample target ranges
   static const auto kSataAhciControlerVMware = 0xfd5fa000ull;
   static const auto kSataAhciControlerHost = 0xb0700000ull;
-  //if (UtilIsInBounds(pa, 0xFD3A0000ull, 0xFD3FFFFFull)) {
+  static const auto kNvmExpressControler = 0xf7d10000ull;
+  if (UtilIsInBounds(pa, kNvmExpressControler, kNvmExpressControler + 0x3fff)) {
+    return true;
+  }
+  // if (UtilIsInBounds(pa, kSataAhciControlerVMware, kSataAhciControlerVMware +
+  // 0xfff)) {
   //  return true;
   //}
-  //if (UtilIsInBounds(pa, kSataAhciControlerVMware, kSataAhciControlerVMware + 0xfff)) {
-  //  return true;
-  //}
-  //if (UtilIsInBounds(pa, kSataAhciControlerHost, kSataAhciControlerHost + 0xfff)) {
+  // if (UtilIsInBounds(pa, kSataAhciControlerHost, kSataAhciControlerHost +
+  // 0xfff)) {
   //  return true;
   //}
   return false;

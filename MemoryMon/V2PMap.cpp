@@ -57,7 +57,7 @@ _Use_decl_annotations_ void V2PMap2::add(void* address, SIZE_T size) {
     const auto pa_base = UtilPaFromVa(va_base);
     v2p_map_.push_back(V2PMapEntry{va_base, pa_base});
 
-    // HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", va_base, pa_base);
+    HYPERPLATFORM_LOG_DEBUG("Map: V:%p P:%p", va_base, pa_base);
   }
 }
 

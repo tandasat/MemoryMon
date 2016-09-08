@@ -64,6 +64,8 @@ InterruptHandlers::InterruptHandlers() {
 
   const auto entries = reinterpret_cast<IDTENTRY64*>(idtr.base);
   for (auto i = 0ul; i < handlers.size(); ++i) {
+// warning C6011: dereferencing NULL pointer. FP due to unannotated __sidt
+#pragma prefast(suppress : __WARNING_DEREF_NULL_PTR)
     const auto high = static_cast<ULONG_PTR>(entries[i].OffsetHigh) << 32;
     const auto middle = static_cast<ULONG_PTR>(entries[i].OffsetMiddle) << 16;
     const auto low = static_cast<ULONG_PTR>(entries[i].OffsetLow);

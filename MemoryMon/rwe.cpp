@@ -221,7 +221,7 @@ _Use_decl_annotations_ static void RweSwtichToNormalMode(
   processor_data->ept_data = processor_data->ept_data_normal;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
-  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR => NORMAL");
+  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR => NORMAL");
   UtilInveptGlobal();
 }
 
@@ -230,7 +230,7 @@ _Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
   processor_data->ept_data = processor_data->ept_data_monitor;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
-  // HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL  => MONITOR");
+  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL  => MONITOR");
   UtilInveptGlobal();
 }
 
@@ -451,8 +451,8 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   //  Dst   x   o
   //  Oth   x   o
   RewpSetReadWriteOnPage(true, ept_entry);
-  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
-  //                             PAGE_ALIGN(fault_va));
+  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
+                               PAGE_ALIGN(fault_va));
   RewpSetMonitorTrapFlag(true);
 
   processor_data->rwe_data->last_data.is_write = is_write;
@@ -515,9 +515,9 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
   //  Dst   x   x
   //  Oth   x   o
   RewpSetReadWriteOnPage(false, processor_data->rwe_data->last_data.ept_entry);
-  // HYPERPLATFORM_LOG_DEBUG_SAFE(
-  //    "MONITOR: S:RWE D:--- O:RW- %p",
-  //    PAGE_ALIGN(processor_data->rwe_data->last_data.fault_va));
+  HYPERPLATFORM_LOG_DEBUG_SAFE(
+      "MONITOR: S:RWE D:--- O:RW- %p",
+      PAGE_ALIGN(processor_data->rwe_data->last_data.fault_va));
   RewpSetMonitorTrapFlag(false);
 
   const auto guest_ip_base =
@@ -584,7 +584,7 @@ _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
 
   if (!pa) {
     UNREFERENCED_PARAMETER(va);
-    // HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
+    HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
   }
 
@@ -598,10 +598,8 @@ _Use_decl_annotations_ static bool RwepSrcPageCallback(void* va, ULONG64 pa,
       EptGetEptPtEntry(processor_data->ept_data_monitor, pa);
   ept_entry_m->fields.execute_access = true;
 
-  // HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RW- D:RWE O:RWE %p",
-  // PAGE_ALIGN(va));
-  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p",
-  // PAGE_ALIGN(va));
+  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL : S:RW- D:RWE O:RWE %p", PAGE_ALIGN(va));
+  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:RW- O:RW- %p", PAGE_ALIGN(va));
   return true;
 }
 
@@ -614,7 +612,7 @@ _Use_decl_annotations_ static bool RwepDstPageCallback(void* va, ULONG64 pa,
 
   if (!pa) {
     UNREFERENCED_PARAMETER(va);
-    // HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
+    HYPERPLATFORM_LOG_DEBUG_SAFE("%p is not backed by physical memory.", va);
     return true;
   }
 
@@ -623,8 +621,7 @@ _Use_decl_annotations_ static bool RwepDstPageCallback(void* va, ULONG64 pa,
   ept_entry->fields.execute_access = false;
   ept_entry->fields.write_access = false;
   ept_entry->fields.read_access = false;
-  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p",
-  // PAGE_ALIGN(va));
+  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR: S:RWE D:--- O:RW- %p", PAGE_ALIGN(va));
   return true;
 }
 
