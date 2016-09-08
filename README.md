@@ -21,10 +21,10 @@ Installation and Uninstallation
 Clone full source code from Github with a below command and compile it on Visual
 Studio.
 
-  $ git clone git@github.com:tandasat/MemoryMon.git
-  $ cd MemoryMon/
-  $ git checkout -b rwe remotes/origin/rwe
-  $ git submodule update --init --recursive
+    $ git clone git@github.com:tandasat/MemoryMon.git
+    $ cd MemoryMon/
+    $ git checkout -b rwe remotes/origin/rwe
+    $ git submodule update --init --recursive
 
 On the x64 platform, you have to enable test signing to install the driver.
 To do that, open the command prompt with the administrator privilege and type
