@@ -13,9 +13,6 @@
 #include "../HyperPlatform/HyperPlatform/util.h"
 #include "../HyperPlatform/HyperPlatform/ept.h"
 #include "../HyperPlatform/HyperPlatform/vmm.h"
-#ifndef HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
-#define HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER 1
-#endif  // HYPERPLATFORM_PERFORMANCE_ENABLE_PERFCOUNTER
 #include "../HyperPlatform/HyperPlatform/performance.h"
 #include "V2PMap.h"
 #include "AddressRanges.h"
@@ -48,6 +45,7 @@ static const auto kRwepNumOfMonitoredBytesForWrite = 16;
 
 struct RweLastData {
   bool is_write;
+  bool is_inside_range;
   void* guest_ip;
   void* fault_va;
   EptCommonEntry* ept_entry;
@@ -221,7 +219,7 @@ _Use_decl_annotations_ static void RweSwtichToNormalMode(
   processor_data->ept_data = processor_data->ept_data_normal;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
-  HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR => NORMAL");
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("MONITOR => NORMAL");
   UtilInveptGlobal();
 }
 
@@ -230,7 +228,7 @@ _Use_decl_annotations_ static void RwepSwitchToMonitoringMode(
   processor_data->ept_data = processor_data->ept_data_monitor;
   UtilVmWrite64(VmcsField::kEptPointer,
                 EptGetEptPointer(processor_data->ept_data));
-  HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL  => MONITOR");
+  // HYPERPLATFORM_LOG_DEBUG_SAFE("NORMAL  => MONITOR");
   UtilInveptGlobal();
 }
 
@@ -259,16 +257,16 @@ _Use_decl_annotations_ static void* RwepFindSourceAddressForExec(
   }
 
   auto offset = 0ul;
-  if (code[5] == 0xe8) {  // e8 xx xx xx xx
+  if (code[5] == 0xe8) {  // e8 xx xx xx xx   // common
     offset = sizeof(code) - 5;
+  } else if (code[4] == 0xff) {  // ff xx xx xx xx xx   // common
+    offset = sizeof(code) - 4;
   } else if (code[8] == 0xff) {  // ff xx
     offset = sizeof(code) - 8;
   } else if (code[7] == 0xff) {  // ff xx xx
     offset = sizeof(code) - 7;
   } else if (code[6] == 0xff) {  // ff xx xx xx
     offset = sizeof(code) - 6;
-  } else if (code[4] == 0xff) {  // ff xx xx xx xx xx
-    offset = sizeof(code) - 4;
   } else if (code[3] == 0xff) {  // ff xx xx xx xx xx xx
     offset = sizeof(code) - 3;
   } else {
@@ -440,7 +438,7 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   //  Oth   x   o
 
   // most of cases. if the operation happed just outside, may be not
-  NT_ASSERT(RweIsInsideDstRange(fault_va));
+  const auto is_inside_range = RweIsInsideDstRange(fault_va);
 
   const auto ept_entry = EptGetEptPtEntry(
       processor_data->ept_data, UtilVmRead64(VmcsField::kGuestPhysicalAddress));
@@ -456,6 +454,7 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   RewpSetMonitorTrapFlag(true);
 
   processor_data->rwe_data->last_data.is_write = is_write;
+  processor_data->rwe_data->last_data.is_inside_range = is_inside_range;
   processor_data->rwe_data->last_data.guest_ip = guest_ip;
   processor_data->rwe_data->last_data.fault_va = fault_va;
   processor_data->rwe_data->last_data.ept_entry = ept_entry;
@@ -520,6 +519,10 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
       PAGE_ALIGN(processor_data->rwe_data->last_data.fault_va));
   RewpSetMonitorTrapFlag(false);
 
+  if (!processor_data->rwe_data->last_data.is_inside_range) {
+    goto end;
+  }
+
   const auto guest_ip_base =
       UtilPcToFileHeader(processor_data->rwe_data->last_data.guest_ip);
   const auto fault_va_base =
@@ -567,7 +570,9 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
   MemTraceHandleReadWrite(processor_data->rwe_data->last_data.guest_ip, gp_regs,
                           processor_data->rwe_data->last_data.is_write);
 
+end:;
   processor_data->rwe_data->last_data.is_write = false;
+  processor_data->rwe_data->last_data.is_inside_range = false;
   processor_data->rwe_data->last_data.guest_ip = 0;
   processor_data->rwe_data->last_data.fault_va = 0;
   processor_data->rwe_data->last_data.ept_entry = nullptr;
