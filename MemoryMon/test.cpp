@@ -14,6 +14,8 @@
 #include "test_util.h"
 #include "mem_trace.h"
 
+#pragma warning(disable : 4505)
+
 extern "C" {
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -121,6 +123,23 @@ _Use_decl_annotations_ void TestRwe() {
     return;
   }
 
+#if 1
+
+  // RweAddDstRange(&HalQuerySystemInformation, sizeof(void*));
+
+  HYPERPLATFORM_COMMON_DBG_BREAK();
+  g_rwe_zero_page = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE,
+                                          kHyperPlatformCommonPoolTag);
+  if (!g_rwe_zero_page) {
+    return;
+  }
+  RtlZeroMemory(g_rwe_zero_page, PAGE_SIZE);
+
+  RweAddDstRange(kRwePoolBigPageTableSizeAddress, sizeof(void*));
+  RweApplyRanges();
+
+#else
+
   // Set TestpRwe1() and TestpRwe2() as source ranges. Those functions are
   // located at the page boundaries: xxxxTEST and PAGETEST sections
   // respectively.
@@ -169,6 +188,7 @@ _Use_decl_annotations_ void TestRwe() {
   // Test finished
   HYPERPLATFORM_COMMON_DBG_BREAK();
   ExFreePoolWithTag(pagable_test_page, kHyperPlatformCommonPoolTag);
+#endif
 }
 
 // A test function located in a non-pagable page

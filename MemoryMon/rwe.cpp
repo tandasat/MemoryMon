@@ -113,6 +113,8 @@ static void* RwepFindSourceAddressForExec(_In_ void* return_addr);
 // variables
 //
 
+void* g_rwe_zero_page;
+
 static RweSharedData g_rwep_shared_data;
 
 static InterruptHandlers g_rewp_int_handlers;
@@ -468,6 +470,13 @@ _Use_decl_annotations_ static void RewpHandleReadWriteViolation(
   } else {
     processor_data->rwe_data->last_data.old_bytes.fill(0);
   }
+
+  if (!is_write && fault_va == kRwePoolBigPageTableSizeAddress) {
+    HYPERPLATFORM_COMMON_DBG_BREAK();
+    const auto pfn = UtilPfnFromVa(g_rwe_zero_page);
+    ept_entry->fields.physial_address = pfn;
+    UtilInveptGlobal();
+  }
 }
 
 _Use_decl_annotations_ void RweHandleEptViolation(
@@ -555,13 +564,40 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
           processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
           processor_data->rwe_data->last_data.fault_va, fault_va_base,
           old_bytes_string, new_bytes_string);
+#if 1
+      if (processor_data->rwe_data->last_data.fault_va ==
+          &HalQuerySystemInformation) {
+        HYPERPLATFORM_COMMON_DBG_BREAK();
+        const auto fault_va = reinterpret_cast<ULONG_PTR>(
+            processor_data->rwe_data->last_data.fault_va);
+        const auto guest_ip = reinterpret_cast<ULONG_PTR>(
+            processor_data->rwe_data->last_data.guest_ip);
+        KeBugCheckEx(
+            HYPERGUARD_VIOLATION,
+            0x100d,    // Type of corrupted region = A secure memory region
+            fault_va,  // Failure type dependent information
+            guest_ip,  // Reserved
+            0);        // Reserved
+      }
+
+#endif
+
     } else {
       HYPERPLATFORM_LOG_INFO_SAFE(
           "S= %p (%p), D= %p (%p), T= W",
           processor_data->rwe_data->last_data.guest_ip, guest_ip_base,
           processor_data->rwe_data->last_data.fault_va, fault_va_base);
     }
+
   } else {
+    if (processor_data->rwe_data->last_data.fault_va ==
+        kRwePoolBigPageTableSizeAddress) {
+      HYPERPLATFORM_COMMON_DBG_BREAK();
+      const auto pfn = UtilPfnFromVa(kRwePoolBigPageTableSizeAddress);
+      processor_data->rwe_data->last_data.ept_entry->fields.physial_address =
+          pfn;
+      UtilInveptGlobal();
+    }
     HYPERPLATFORM_LOG_INFO_SAFE(
         "S= %p (%p), D= %p (%p), T= R",
         processor_data->rwe_data->last_data.guest_ip, guest_ip_base,

@@ -21,6 +21,9 @@ extern "C" {
 // constants and macros
 //
 
+static const auto kRwePoolBigPageTableSizeAddress =
+    reinterpret_cast<void*>(0xfffff80002c36a38);
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // types
@@ -79,6 +82,8 @@ _IRQL_requires_min_(DISPATCH_LEVEL) void RweHandleTlbFlush(
 //
 // variables
 //
+
+extern void* g_rwe_zero_page;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
