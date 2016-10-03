@@ -31,6 +31,10 @@ extern "C" {
 // prototypes
 //
 
+_IRQL_requires_max_(PASSIVE_LEVEL) NTSTATUS TestInitialization();
+
+_IRQL_requires_max_(PASSIVE_LEVEL) void TestTermination();
+
 _IRQL_requires_max_(PASSIVE_LEVEL) void TestRwe();
 
 ////////////////////////////////////////////////////////////////////////////////

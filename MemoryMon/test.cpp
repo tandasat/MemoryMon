@@ -60,10 +60,18 @@ _IRQL_requires_max_(PASSIVE_LEVEL) static NTSTATUS TestpForEachDriver(
 _IRQL_requires_max_(PASSIVE_LEVEL) static bool TestpForEachDriverCallback(
     _In_ const RTL_PROCESS_MODULE_INFORMATION& module, _In_opt_ void* context);
 
+_IRQL_requires_max_(PASSIVE_LEVEL) static void TestpLoadImageNotifyRoutine(
+    _In_opt_ PUNICODE_STRING full_image_name, _In_ HANDLE process_id,
+    _In_ PIMAGE_INFO image_info);
+;
+
 #if defined(ALLOC_PRAGMA)
+#pragma alloc_text(INIT, TestInitialization)
 #pragma alloc_text(INIT, TestRwe)
 #pragma alloc_text(INIT, TestpForEachDriver)
 #pragma alloc_text(INIT, TestpForEachDriverCallback)
+#pragma alloc_text(PAGE, TestTermination)
+#pragma alloc_text(PAGE, TestpLoadImageNotifyRoutine)
 
 // Locate TestpRwe1 on a NonPagable code section outside of the .text section
 // and TestpRwe2 on Pagable code section outside of the PAGE section. Note that
@@ -82,6 +90,22 @@ _IRQL_requires_max_(PASSIVE_LEVEL) static bool TestpForEachDriverCallback(
 //
 // implementations
 //
+
+_Use_decl_annotations_ NTSTATUS TestInitialization() {
+  PAGED_CODE();
+
+  auto status = PsSetLoadImageNotifyRoutine(TestpLoadImageNotifyRoutine);
+  if (!NT_SUCCESS(status)) {
+    return status;
+  }
+
+  return status;
+}
+_Use_decl_annotations_ void TestTermination() {
+  PAGED_CODE();
+
+  PsRemoveLoadImageNotifyRoutine(TestpLoadImageNotifyRoutine);
+}
 
 // Runs a set of tests for MemoryMonRWE
 _Use_decl_annotations_ void TestRwe() {
@@ -260,6 +284,34 @@ _Use_decl_annotations_ static bool TestpForEachDriverCallback(
     RweAddSrcRange(module.ImageBase, module.ImageSize);
   }
   return true;
+}
+
+_Use_decl_annotations_ static void TestpLoadImageNotifyRoutine(
+    PUNICODE_STRING full_image_name,
+    HANDLE process_id,  // pid into which image is being mapped
+    PIMAGE_INFO image_info) {
+  PAGED_CODE();
+  UNREFERENCED_PARAMETER(process_id);
+
+  if (!full_image_name || !image_info->SystemModeImage) {
+    return;
+  }
+
+  HYPERPLATFORM_LOG_DEBUG("New driver: %wZ", full_image_name);
+
+  static UNICODE_STRING kTargetDriverExpressions[] = {
+    RTL_CONSTANT_STRING(L"*\\SAMPLE.SYS"),
+  };
+
+  for (auto& expression : kTargetDriverExpressions) {
+    if (!FsRtlIsNameInExpression(&expression, full_image_name, TRUE, nullptr)) {
+      continue;
+    }
+
+    RweAddSrcRange(image_info->ImageBase, image_info->ImageSize);
+    RweApplyRanges();
+    break;
+  }
 }
 
 }  // extern "C"
