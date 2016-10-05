@@ -22,7 +22,7 @@ extern "C" {
 //
 
 static const auto kRwePoolBigPageTableSizeAddress =
-    reinterpret_cast<void*>(0xfffff80002c36a38);
+    reinterpret_cast<void*>(0xfffff80002c66a38);
 
 ////////////////////////////////////////////////////////////////////////////////
 //

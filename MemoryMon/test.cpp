@@ -113,7 +113,7 @@ _Use_decl_annotations_ void TestTermination() {
 _Use_decl_annotations_ void TestRwe() {
   PAGED_CODE();
 
-  HYPERPLATFORM_COMMON_DBG_BREAK();
+  //HYPERPLATFORM_COMMON_DBG_BREAK();
 
   if (MemTraceIsEnabled()) {
     TestpForEachDriver(TestpForEachDriverCallback, nullptr);
@@ -123,11 +123,7 @@ _Use_decl_annotations_ void TestRwe() {
     return;
   }
 
-#if 1
-
-  // RweAddDstRange(&HalQuerySystemInformation, sizeof(void*));
-
-  HYPERPLATFORM_COMMON_DBG_BREAK();
+  // Initialize a fake page filled with zero for read protect
   g_rwe_zero_page = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE,
                                           kHyperPlatformCommonPoolTag);
   if (!g_rwe_zero_page) {
@@ -135,10 +131,18 @@ _Use_decl_annotations_ void TestRwe() {
   }
   RtlZeroMemory(g_rwe_zero_page, PAGE_SIZE);
 
+  // Protect HalDispatchTable[1] from being written
+  HYPERPLATFORM_LOG_INFO("Write Protect: %p : hal!HalDispatchTable[1]",
+                         &HalQuerySystemInformation);
+  RweAddDstRange(&HalQuerySystemInformation, sizeof(void*));
+
+  // Protect PoolBigPageTableSize from being read
+  HYPERPLATFORM_LOG_INFO("Read  Protect: %p : nt!PoolBigPageTableSize",
+                         kRwePoolBigPageTableSizeAddress);
   RweAddDstRange(kRwePoolBigPageTableSizeAddress, sizeof(void*));
   RweApplyRanges();
 
-#else
+#if 0
 
   // Set TestpRwe1() and TestpRwe2() as source ranges. Those functions are
   // located at the page boundaries: xxxxTEST and PAGETEST sections
@@ -320,7 +324,10 @@ _Use_decl_annotations_ static void TestpLoadImageNotifyRoutine(
   HYPERPLATFORM_LOG_DEBUG("New driver: %wZ", full_image_name);
 
   static UNICODE_STRING kTargetDriverExpressions[] = {
-    RTL_CONSTANT_STRING(L"*\\SAMPLE.SYS"),
+      RTL_CONSTANT_STRING(L"*\\NOIMAGE.SYS"),
+      RTL_CONSTANT_STRING(L"*\\UNLINKED.SYS"),
+      RTL_CONSTANT_STRING(L"*\\NGS*.SYS"),
+      RTL_CONSTANT_STRING(L"*\\DISPG.SYS"),
   };
 
   for (auto& expression : kTargetDriverExpressions) {
@@ -328,6 +335,8 @@ _Use_decl_annotations_ static void TestpLoadImageNotifyRoutine(
       continue;
     }
 
+    HYPERPLATFORM_LOG_INFO("Untrusted driver is being loaded. Add the range it for trace.");
+    HYPERPLATFORM_LOG_INFO("Name: %wZ", full_image_name);
     RweAddSrcRange(image_info->ImageBase, image_info->ImageSize);
     RweApplyRanges();
     break;
