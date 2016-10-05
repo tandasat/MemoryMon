@@ -23,7 +23,7 @@ Studio.
 
     $ git clone git@github.com:tandasat/MemoryMon.git
     $ cd MemoryMon/
-    $ git checkout -b rwe remotes/origin/rwe
+    $ git checkout -b rwe_cdfs remotes/origin/rwe_cdfs
     $ git submodule update --init --recursive
 
 On the x64 platform, you have to enable test signing to install the driver.
