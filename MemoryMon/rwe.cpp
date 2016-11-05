@@ -557,18 +557,19 @@ _Use_decl_annotations_ void RweHandleMonitorTrapFlag(
           old_bytes_string, new_bytes_string);
 
       if (processor_data->rwe_data->last_data.fault_va ==
-          &HalQuerySystemInformation) {
+              &HalQuerySystemInformation &&
+          RtlEqualMemory(processor_data->rwe_data->last_data.old_bytes.data(),
+                         new_bytes, sizeof(new_bytes)) == FALSE) {
         const auto fault_va = reinterpret_cast<ULONG_PTR>(
             processor_data->rwe_data->last_data.fault_va);
         const auto guest_ip = reinterpret_cast<ULONG_PTR>(
             processor_data->rwe_data->last_data.guest_ip);
         //
-        // We have detected write access to HalDispatchTable[1] from an
-        // untrusted driver. Stop the system to prevent further exploitation.
+        // We have detected write access to HalDispatchTable[1]. Stop the system
+        // to prevent further exploitation.
         //
-        KeBugCheckEx(HYPERGUARD_VIOLATION,
-                     0x100d,  // A secure memory region corruption
-                     fault_va, guest_ip, 0);
+        DbgBreakPoint();
+        KeBugCheck(MANUALLY_INITIATED_CRASH);
       }
     } else {
       HYPERPLATFORM_LOG_INFO_SAFE(

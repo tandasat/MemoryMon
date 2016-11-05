@@ -55,16 +55,19 @@ _IRQL_requires_max_(PASSIVE_LEVEL) static NTSTATUS TestpForEachDriver(
 _IRQL_requires_max_(PASSIVE_LEVEL) static bool TestpForEachDriverCallback(
     _In_ const RTL_PROCESS_MODULE_INFORMATION& module, _In_opt_ void* context);
 
+_IRQL_requires_max_(PASSIVE_LEVEL) static bool TestpForEachDriverCallbackForNgs(
+    _In_ const RTL_PROCESS_MODULE_INFORMATION& module, _In_opt_ void* context);
+
 _IRQL_requires_max_(PASSIVE_LEVEL) static void TestpLoadImageNotifyRoutine(
     _In_opt_ PUNICODE_STRING full_image_name, _In_ HANDLE process_id,
     _In_ PIMAGE_INFO image_info);
-;
 
 #if defined(ALLOC_PRAGMA)
 #pragma alloc_text(INIT, TestInitialization)
 #pragma alloc_text(INIT, TestRwe)
 #pragma alloc_text(INIT, TestpForEachDriver)
 #pragma alloc_text(INIT, TestpForEachDriverCallback)
+#pragma alloc_text(INIT, TestpForEachDriverCallbackForNgs)
 #pragma alloc_text(PAGE, TestTermination)
 #pragma alloc_text(PAGE, TestpLoadImageNotifyRoutine)
 #endif
@@ -73,6 +76,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL) static void TestpLoadImageNotifyRoutine(
 //
 // variables
 //
+
+static UNICODE_STRING kTestpTargetDriverExpressions[] = {
+    RTL_CONSTANT_STRING(L"*\\NGS*.SYS"),
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -109,9 +116,11 @@ _Use_decl_annotations_ void TestRwe() {
     return;
   }
 
+  TestpForEachDriver(TestpForEachDriverCallbackForNgs, nullptr);
+
   // Protect HalDispatchTable[1] from being written
   HYPERPLATFORM_LOG_INFO("Write Protect: %p : hal!HalDispatchTable[1]",
-      &HalQuerySystemInformation);
+                         &HalQuerySystemInformation);
   RweAddDstRange(&HalQuerySystemInformation, sizeof(void*));
 
   // Reflect all range data to EPT
@@ -196,6 +205,34 @@ _Use_decl_annotations_ static bool TestpForEachDriverCallback(
   return true;
 }
 
+_Use_decl_annotations_ static bool TestpForEachDriverCallbackForNgs(
+    const RTL_PROCESS_MODULE_INFORMATION& module, void* context) {
+  PAGED_CODE();
+  UNREFERENCED_PARAMETER(context);
+
+  ANSI_STRING fullpath_A = {};
+  RtlInitAnsiString(&fullpath_A,
+                    reinterpret_cast<const char*>(module.FullPathName));
+  UNICODE_STRING fullpath_U = {};
+  auto status = RtlAnsiStringToUnicodeString(&fullpath_U, &fullpath_A, TRUE);
+  if (!NT_SUCCESS(status)) {
+    return true;
+  }
+  for (auto& expression : kTestpTargetDriverExpressions) {
+    if (!FsRtlIsNameInExpression(&expression, &fullpath_U, TRUE, nullptr)) {
+      continue;
+    }
+
+    HYPERPLATFORM_LOG_DEBUG(
+        "Untrusted driver is detected. Add the range it for trace.");
+    HYPERPLATFORM_LOG_DEBUG("Name: %wZ", &fullpath_U);
+    RweAddSrcRange(module.ImageBase, module.ImageSize);
+    break;
+  }
+  RtlFreeUnicodeString(&fullpath_U);
+  return true;
+}
+
 _Use_decl_annotations_ static void TestpLoadImageNotifyRoutine(
     PUNICODE_STRING full_image_name,
     HANDLE process_id,  // pid into which image is being mapped
@@ -209,16 +246,13 @@ _Use_decl_annotations_ static void TestpLoadImageNotifyRoutine(
 
   HYPERPLATFORM_LOG_DEBUG("New driver: %wZ", full_image_name);
 
-  static UNICODE_STRING kTargetDriverExpressions[] = {
-    RTL_CONSTANT_STRING(L"*\\NGS*.SYS"),
-  };
-
-  for (auto& expression : kTargetDriverExpressions) {
+  for (auto& expression : kTestpTargetDriverExpressions) {
     if (!FsRtlIsNameInExpression(&expression, full_image_name, TRUE, nullptr)) {
       continue;
     }
 
-    HYPERPLATFORM_LOG_DEBUG("Untrusted driver is being loaded. Add the range it for trace.");
+    HYPERPLATFORM_LOG_DEBUG(
+        "Untrusted driver is detected. Add the range it for trace.");
     HYPERPLATFORM_LOG_DEBUG("Name: %wZ", full_image_name);
     RweAddSrcRange(image_info->ImageBase, image_info->ImageSize);
     RweApplyRanges();
