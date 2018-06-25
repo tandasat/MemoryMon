@@ -8,6 +8,7 @@
 #include "rwe.h"
 #define NTSTRSAFE_NO_CB_FUNCTIONS
 #include <ntstrsafe.h>
+#include <intrin.h>
 #include "../HyperPlatform/HyperPlatform/common.h"
 #include "../HyperPlatform/HyperPlatform/log.h"
 #include "../HyperPlatform/HyperPlatform/util.h"
